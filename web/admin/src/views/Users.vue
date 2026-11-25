@@ -22,6 +22,7 @@
         <el-table-column prop="name" label="姓名" min-width="120" />
         <el-table-column prop="phone" label="手机号" min-width="140" />
         <el-table-column prop="email" label="邮箱" min-width="180" />
+        <el-table-column v-if="auth.isSuper" prop="tenantName" label="所属租户" min-width="140" />
         <el-table-column v-if="auth.isSuper" prop="role" label="角色" width="130" />
         <el-table-column label="钱包余额" width="130">
           <template #default="{ row }">{{ formatCents(row.balanceCents) }}</template>
@@ -81,8 +82,10 @@
               <el-option label="充电用户" value="user" />
             </el-select>
           </el-form-item>
-          <el-form-item label="租户ID" prop="tenantId">
-            <el-input v-model="createForm.tenantId" placeholder="超管创建租户管理员时填写" />
+          <el-form-item label="所属租户" prop="tenantId">
+            <el-select v-model="createForm.tenantId" style="width: 100%" filterable placeholder="选择租户">
+              <el-option v-for="t in tenants" :key="t.id" :label="t.name" :value="String(t.id)" />
+            </el-select>
           </el-form-item>
         </template>
       </el-form>
@@ -123,6 +126,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { usersApi } from '@/api/users'
+import { tenantsApi } from '@/api/tenants'
 import type { CreateUserPayload } from '@/api/users'
 import type { Role, User } from '@/api/types'
 import { formatCents } from '@/utils/format'
@@ -132,6 +136,7 @@ const auth = useAuthStore()
 const loading = ref(false)
 const keyword = ref('')
 const list = ref<User[]>([])
+const tenants = ref<{ id: number; name: string }[]>([])
 const page = ref(1)
 const pageSize = 10
 const pagedList = computed(() =>
@@ -154,7 +159,12 @@ async function load() {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  if (auth.isSuper) {
+    tenantsApi.list().then((rows) => { tenants.value = rows }).catch(() => {})
+  }
+})
 
 const saving = ref(false)
 const createVisible = ref(false)

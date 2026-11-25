@@ -91,8 +91,12 @@ func (a *App) listReservations(w http.ResponseWriter, r *http.Request) {
 	userID, _ := strconv.ParseInt(r.URL.Query().Get("userId"), 10, 64)
 	query := `SELECT rs.id,rs.gun_id,rs.start_at,rs.status,st.name,u.phone,u.name,rs.created_at
 		FROM reservations rs JOIN stations st ON st.id=rs.station_id
-		JOIN tenant_users tu ON tu.id=rs.tenant_user_id JOIN users u ON u.id=tu.user_id WHERE rs.tenant_id=?`
-	args := []any{s.TenantID}
+		JOIN tenant_users tu ON tu.id=rs.tenant_user_id JOIN users u ON u.id=tu.user_id WHERE 1=1`
+	args := []any{}
+	if s.Role != "super" {
+		query += ` AND rs.tenant_id=?`
+		args = append(args, s.TenantID)
+	}
 	if s.Role == "user" {
 		query += ` AND rs.tenant_user_id=?`
 		args = append(args, s.TenantUserID)
@@ -255,8 +259,12 @@ func (a *App) listOrders(w http.ResponseWriter, r *http.Request) {
 	userID, _ := strconv.ParseInt(r.URL.Query().Get("userId"), 10, 64)
 	query := `SELECT o.id,o.status,o.start_at,o.end_at,o.settle_at,o.energy_wh,o.amount_cents,st.name,u.phone,u.name
 		FROM orders o JOIN stations st ON st.id=o.station_id JOIN tenant_users tu ON tu.id=o.tenant_user_id JOIN users u ON u.id=tu.user_id
-		WHERE o.tenant_id=?`
-	args := []any{s.TenantID}
+		WHERE 1=1`
+	args := []any{}
+	if s.Role != "super" {
+		query += ` AND o.tenant_id=?`
+		args = append(args, s.TenantID)
+	}
 	if s.Role == "user" {
 		query += ` AND o.tenant_user_id=?`
 		args = append(args, s.TenantUserID)

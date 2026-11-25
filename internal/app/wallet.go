@@ -7,6 +7,7 @@ import (
 )
 
 type walletTxReq struct {
+	TenantID   int64  `json:"tenantId"`
 	UserID     int64  `json:"userId"`
 	Amount     int64  `json:"amountCents"`
 	Method     string `json:"method"`
@@ -31,8 +32,12 @@ func (a *App) listWallets(w http.ResponseWriter, r *http.Request) {
 	s := current(r)
 	userID, _ := strconv.ParseInt(r.URL.Query().Get("userId"), 10, 64)
 	query := `SELECT w.id,w.tenant_id,w.tenant_user_id,w.balance_cents,w.status,u.id,u.phone,u.name
-		FROM wallets w JOIN tenant_users tu ON tu.id=w.tenant_user_id JOIN users u ON u.id=tu.user_id WHERE w.tenant_id=?`
-	args := []any{s.TenantID}
+		FROM wallets w JOIN tenant_users tu ON tu.id=w.tenant_user_id JOIN users u ON u.id=tu.user_id WHERE 1=1`
+	args := []any{}
+	if s.Role != "super" {
+		query += ` AND w.tenant_id=?`
+		args = append(args, s.TenantID)
+	}
 	if userID > 0 {
 		query += ` AND u.id=?`
 		args = append(args, userID)
@@ -62,8 +67,12 @@ func (a *App) listLedgers(w http.ResponseWriter, r *http.Request) {
 	s := current(r)
 	userID, _ := strconv.ParseInt(r.URL.Query().Get("userId"), 10, 64)
 	query := `SELECT l.id,l.kind,l.amount_cents,l.balance_after,l.method,l.voucher_no,l.remark,l.biz_no,l.created_at,u.phone
-		FROM wallet_ledgers l JOIN tenant_users tu ON tu.id=l.tenant_user_id JOIN users u ON u.id=tu.user_id WHERE l.tenant_id=?`
-	args := []any{s.TenantID}
+		FROM wallet_ledgers l JOIN tenant_users tu ON tu.id=l.tenant_user_id JOIN users u ON u.id=tu.user_id WHERE 1=1`
+	args := []any{}
+	if s.Role != "super" {
+		query += ` AND l.tenant_id=?`
+		args = append(args, s.TenantID)
+	}
 	if userID > 0 {
 		query += ` AND u.id=?`
 		args = append(args, userID)
@@ -142,7 +151,12 @@ func (a *App) walletMutation(w http.ResponseWriter, r *http.Request, kind string
 		return
 	}
 	s := current(r)
-	tuID, err := a.tenantUserID(s.TenantID, req.UserID)
+	tenantID, err := scopeTenant(r, req.TenantID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	tuID, err := a.tenantUserID(tenantID, req.UserID)
 	if err != nil {
 		writeErr(w, fail(404, "用户不属于当前租户"))
 		return
@@ -164,7 +178,7 @@ func (a *App) walletMutation(w http.ResponseWriter, r *http.Request, kind string
 		writeJSON(w, http.StatusOK, map[string]any{"id": existing, "duplicate": true})
 		return
 	}
-	wid, balance, err := a.walletID(s.TenantID, tuID)
+	wid, balance, err := a.walletID(tenantID, tuID)
 	if err != nil {
 		writeErr(w, fail(404, "钱包不存在"))
 		return
@@ -194,7 +208,7 @@ func (a *App) walletMutation(w http.ResponseWriter, r *http.Request, kind string
 		return
 	}
 	_, err = a.DB.Exec(`INSERT INTO wallet_ledgers(tenant_id,wallet_id,tenant_user_id,kind,amount_cents,balance_after,method,voucher_no,remark,operator_id,biz_no,created_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, s.TenantID, wid, tuID, kind, amount, after, req.Method, req.VoucherNo,
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, tenantID, wid, tuID, kind, amount, after, req.Method, req.VoucherNo,
 		req.Remark, s.UserID, bizNo, now())
 	if err != nil {
 		writeErr(w, err)
@@ -212,6 +226,6 @@ func (a *App) walletMutation(w http.ResponseWriter, r *http.Request, kind string
 	} else {
 		subject = "退款到账"
 	}
-	a.enqueueNotify(s.TenantID, req.UserID, kind, subject,
+	a.enqueueNotify(tenantID, req.UserID, kind, subject,
 		subject+"，金额 "+moneyText(req.Amount)+"，当前余额 "+moneyText(after)+"。")
 }

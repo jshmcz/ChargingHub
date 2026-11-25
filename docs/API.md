@@ -29,8 +29,10 @@
 
 ## 超管
 
-- `GET|POST /api/tenants`，`PUT /api/tenants/{id}` body `{name,status}`
-- `POST /api/users` body `{phone,email,password,role,tenantId,name}`（用于创建租户管理员）
+- `GET /api/tenants`，`PUT /api/tenants/{id}` body `{name,status}`
+- `POST /api/tenants` body `{name,status,adminName,adminPhone,adminEmail,adminPassword}`：一步创建租户+管理员账号，租户ID自增，管理员自动关联该租户（role=tenant_admin），用 adminPhone/adminPassword 登录即自动归属该租户。`adminEmail` 用于接收通知。返回 `{id,name,adminPhone,adminUserId}`
+- `POST /api/users` body `{phone,email,password,role,tenantId,name}`（超管/租户管理员创建用户；超管需传 tenantId，列表对超管显示全部租户用户并带 tenantName）
+- 超管（role=super）拥有全部接口权限；各列表接口（场站/桩/枪/用户/钱包/流水/预约/订单/通知）对超管返回全部租户数据并带 tenantName/tenantId。超管写操作需显式传 tenantId（场站/钱包），桩按所属场站反推租户。
 
 ## 租户管理（tenant_admin / operator）
 

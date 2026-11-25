@@ -226,10 +226,18 @@ func (a *App) createUser(w http.ResponseWriter, r *http.Request) {
 func (a *App) listUsers(w http.ResponseWriter, r *http.Request) {
 	s := current(r)
 	keyword := "%" + r.URL.Query().Get("keyword") + "%"
-	rows, err := a.DB.Query(`SELECT u.id,u.phone,u.email,u.name,u.status,tu.role,tu.id,COALESCE(w.balance_cents,0)
+	query := `SELECT u.id,u.phone,u.email,u.name,u.status,tu.role,tu.id,tu.tenant_id,COALESCE(t.name,''),COALESCE(w.balance_cents,0)
 		FROM tenant_users tu JOIN users u ON u.id=tu.user_id
+		LEFT JOIN tenants t ON t.id=tu.tenant_id
 		LEFT JOIN wallets w ON w.tenant_user_id=tu.id AND w.tenant_id=tu.tenant_id
-		WHERE tu.tenant_id=? AND (u.phone LIKE ? OR u.name LIKE ?) ORDER BY tu.id DESC`, s.TenantID, keyword, keyword)
+		WHERE (u.phone LIKE ? OR u.name LIKE ?)`
+	args := []any{keyword, keyword}
+	if s.Role != "super" {
+		query += ` AND tu.tenant_id=?`
+		args = append(args, s.TenantID)
+	}
+	query += ` ORDER BY tu.id DESC`
+	rows, err := a.DB.Query(query, args...)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -237,15 +245,15 @@ func (a *App) listUsers(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	out := make([]map[string]any, 0)
 	for rows.Next() {
-		var id, tuID int64
-		var phone, email, name, status, role string
-		var balance int64
-		if err = rows.Scan(&id, &phone, &email, &name, &status, &role, &tuID, &balance); err != nil {
+		var id, tuID, tenantID, balance int64
+		var phone, email, name, status, role, tenantName string
+		if err = rows.Scan(&id, &phone, &email, &name, &status, &role, &tuID, &tenantID, &tenantName, &balance); err != nil {
 			writeErr(w, err)
 			return
 		}
 		out = append(out, map[string]any{"id": id, "tenantUserId": tuID, "phone": phone, "email": email,
-			"name": name, "status": status, "role": role, "balanceCents": balance})
+			"name": name, "status": status, "role": role, "balanceCents": balance,
+			"tenantId": tenantID, "tenantName": tenantName})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -268,7 +276,12 @@ func (a *App) updateUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if _, err = a.DB.Exec(`UPDATE tenant_users SET status=? WHERE user_id=? AND tenant_id=?`, req.Status, id, current(r).TenantID); err != nil {
+	if current(r).Role == "super" {
+		_, err = a.DB.Exec(`UPDATE tenant_users SET status=? WHERE user_id=?`, req.Status, id)
+	} else {
+		_, err = a.DB.Exec(`UPDATE tenant_users SET status=? WHERE user_id=? AND tenant_id=?`, req.Status, id, current(r).TenantID)
+	}
+	if err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -279,8 +292,12 @@ func (a *App) updateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 type tenantReq struct {
-	Name   string `json:"name"`
-	Status string `json:"status"`
+	Name          string `json:"name"`
+	Status        string `json:"status"`
+	AdminName     string `json:"adminName"`
+	AdminPhone    string `json:"adminPhone"`
+	AdminEmail    string `json:"adminEmail"`
+	AdminPassword string `json:"adminPassword"`
 }
 
 func (a *App) listTenants(w http.ResponseWriter, r *http.Request) {
@@ -309,17 +326,73 @@ func (a *App) createTenant(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if strings.TrimSpace(req.Name) == "" {
+	req.Name = strings.TrimSpace(req.Name)
+	req.AdminPhone = strings.TrimSpace(req.AdminPhone)
+	if req.Name == "" {
 		writeErr(w, fail(400, "租户名称不能为空"))
 		return
 	}
-	res, err := a.DB.Exec(`INSERT INTO tenants(name,status,created_at) VALUES(?,?,?)`, req.Name, "active", now())
+	if req.AdminPhone == "" {
+		writeErr(w, fail(400, "请填写管理员手机号（用于登录该租户）"))
+		return
+	}
+	if strings.TrimSpace(req.AdminPassword) == "" {
+		writeErr(w, fail(400, "请填写管理员初始密码"))
+		return
+	}
+
+	hash, herr := bcrypt.GenerateFromPassword([]byte(req.AdminPassword), bcrypt.DefaultCost)
+	if herr != nil {
+		writeErr(w, herr)
+		return
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	tx, err := a.DB.Begin()
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	id, _ := res.LastInsertId()
-	writeJSON(w, http.StatusOK, map[string]any{"id": id, "name": req.Name})
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`INSERT INTO tenants(name,status,created_at) VALUES(?,?,?)`, req.Name, "active", now())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	tenantID, _ := res.LastInsertId()
+
+	// 管理员账号全局按手机号唯一；已存在则复用用户主档，仅在该租户下新建关联。
+	var adminID int64
+	err = tx.QueryRow(`SELECT id FROM users WHERE phone=?`, req.AdminPhone).Scan(&adminID)
+	if err == sql.ErrNoRows {
+		res, err = tx.Exec(`INSERT INTO users(phone,email,password_hash,name,role,status,created_at) VALUES(?,?,?,?,?,?,?)`,
+			req.AdminPhone, req.AdminEmail, string(hash), req.AdminName, "user", "active", now())
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		adminID, _ = res.LastInsertId()
+	} else if err != nil {
+		writeErr(w, err)
+		return
+	} else if req.AdminEmail != "" {
+		_, _ = tx.Exec(`UPDATE users SET email=? WHERE id=?`, req.AdminEmail, adminID)
+	}
+
+	if _, err = tx.Exec(`INSERT INTO tenant_users(tenant_id,user_id,role,status,created_at) VALUES(?,?,?,?,?)`,
+		tenantID, adminID, "tenant_admin", "active", now()); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err = tx.Commit(); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id": tenantID, "name": req.Name, "adminPhone": req.AdminPhone, "adminUserId": adminID,
+	})
 }
 
 func (a *App) updateTenant(w http.ResponseWriter, r *http.Request) {

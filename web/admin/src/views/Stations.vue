@@ -8,6 +8,7 @@
     <div class="table-wrap">
       <el-table :data="pagedList" border v-loading="loading" min-width="1100">
         <el-table-column prop="id" label="ID" width="80" />
+        <el-table-column v-if="auth.isSuper" prop="tenantName" label="所属租户" min-width="140" />
         <el-table-column prop="name" label="名称" min-width="140" />
         <el-table-column prop="address" label="地址" min-width="180" />
         <el-table-column prop="defaultStartTime" label="默认启动" width="110" />
@@ -44,6 +45,13 @@
     <el-dialog v-model="dialogVisible" :title="editing ? '编辑场站' : '新建场站'" width="620px">
       <el-form ref="formRef" :model="form" :rules="rules" label-width="120px">
         <el-row :gutter="16">
+          <el-col v-if="auth.isSuper && !editing" :xs="24" :sm="12">
+            <el-form-item label="所属租户" prop="tenantId">
+              <el-select v-model="form.tenantId" style="width: 100%" filterable placeholder="选择租户">
+                <el-option v-for="t in tenants" :key="t.id" :label="t.name" :value="t.id" />
+              </el-select>
+            </el-form-item>
+          </el-col>
           <el-col :xs="24" :sm="12">
             <el-form-item label="场站名称" prop="name">
               <el-input v-model="form.name" />
@@ -95,6 +103,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { stationsApi } from '@/api/stations'
+import { tenantsApi } from '@/api/tenants'
 import type { StationInput } from '@/api/stations'
 import type { Station } from '@/api/types'
 import { centsToYuan, formatCents, yuanToCents } from '@/utils/format'
@@ -103,6 +112,7 @@ import { useAuthStore } from '@/stores/auth'
 const auth = useAuthStore()
 const loading = ref(false)
 const list = ref<Station[]>([])
+const tenants = ref<{ id: number; name: string }[]>([])
 const page = ref(1)
 const pageSize = 10
 const pagedList = computed(() =>
@@ -124,13 +134,19 @@ async function load() {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  if (auth.isSuper) {
+    tenantsApi.list().then((rows) => { tenants.value = rows }).catch(() => {})
+  }
+})
 
 const dialogVisible = ref(false)
 const editing = ref<Station | null>(null)
 const saving = ref(false)
 const formRef = ref<FormInstance>()
 const form = reactive({
+  tenantId: 0,
   name: '',
   address: '',
   defaultStartTime: '22:00',
@@ -141,6 +157,7 @@ const form = reactive({
 })
 
 const rules: FormRules = {
+  tenantId: [{ validator: (_r, v, cb) => (!auth.isSuper || editing.value || v > 0) ? cb() : cb(new Error('请选择所属租户')), trigger: 'change' }],
   name: [{ required: true, message: '请输入场站名称', trigger: 'blur' }],
   address: [{ required: true, message: '请输入地址', trigger: 'blur' }],
   defaultStartTime: [{ required: true, message: '请输入默认启动时刻', trigger: 'blur' }],
@@ -149,6 +166,7 @@ const rules: FormRules = {
 function openCreate() {
   editing.value = null
   Object.assign(form, {
+    tenantId: tenants.value[0]?.id || 0,
     name: '',
     address: '',
     defaultStartTime: '22:00',
@@ -182,6 +200,7 @@ async function save() {
     return
   }
   const payload: StationInput = {
+    tenantId: form.tenantId,
     name: form.name,
     address: form.address,
     defaultStartTime: form.defaultStartTime,

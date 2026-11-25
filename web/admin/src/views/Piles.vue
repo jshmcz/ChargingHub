@@ -20,6 +20,7 @@
         <el-table-column label="所属场站" min-width="140">
           <template #default="{ row }">{{ stationName(row.stationId) }}</template>
         </el-table-column>
+        <el-table-column v-if="auth.isSuper" prop="tenantName" label="所属租户" min-width="140" />
         <el-table-column label="枪数" width="90">
           <template #default="{ row }">{{ row.guns?.length ?? '-' }}</template>
         </el-table-column>
@@ -110,7 +111,9 @@ import { gunsApi, pilesApi } from '@/api/piles'
 import type { PileInput } from '@/api/piles'
 import type { Gun, Pile, Station } from '@/api/types'
 import { stationsApi } from '@/api/stations'
+import { useAuthStore } from '@/stores/auth'
 
+const auth = useAuthStore()
 const loading = ref(false)
 const stations = ref<Station[]>([])
 const piles = ref<Pile[]>([])

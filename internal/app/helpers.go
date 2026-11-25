@@ -136,6 +136,11 @@ func requireRoles(roles ...string) func(http.HandlerFunc) http.HandlerFunc {
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			role := current(r).Role
+			// 超管拥有全部权限;所见数据范围由各 list 接口按 role 自行放宽。
+			if role == "super" {
+				next(w, r)
+				return
+			}
 			for _, x := range roles {
 				if role == x {
 					next(w, r)
@@ -145,6 +150,19 @@ func requireRoles(roles ...string) func(http.HandlerFunc) http.HandlerFunc {
 			writeErr(w, fail(403, "无权限"))
 		}
 	}
+}
+
+// scopeTenant 返回写操作应落到的租户 ID。
+// 普通角色锁定在会话租户；超管需显式指定租户，避免误写入 tenant 0。
+func scopeTenant(r *http.Request, requested int64) (int64, error) {
+	s := current(r)
+	if s.Role != "super" {
+		return s.TenantID, nil
+	}
+	if requested <= 0 {
+		return 0, fail(400, "超管操作需指定所属租户")
+	}
+	return requested, nil
 }
 
 func pathID(r *http.Request, name string) (int64, error) {

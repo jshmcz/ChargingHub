@@ -89,8 +89,12 @@ func (a *App) listNotifications(w http.ResponseWriter, r *http.Request) {
 	s := current(r)
 	userID, _ := strconv.ParseInt(r.URL.Query().Get("userId"), 10, 64)
 	query := `SELECT n.id,n.event,n.subject,n.body,n.status,n.error,n.created_at,n.sent_at,u.phone
-		FROM notifications n LEFT JOIN users u ON u.id=n.user_id WHERE n.tenant_id=?`
-	args := []any{s.TenantID}
+		FROM notifications n LEFT JOIN users u ON u.id=n.user_id WHERE 1=1`
+	args := []any{}
+	if s.Role != "super" {
+		query += ` AND n.tenant_id=?`
+		args = append(args, s.TenantID)
+	}
 	if s.Role == "user" {
 		query += ` AND n.user_id=?`
 		args = append(args, s.UserID)

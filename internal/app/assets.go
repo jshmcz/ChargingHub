@@ -1,6 +1,7 @@
 package app
 
 import (
+	"database/sql"
 	"net/http"
 	"strconv"
 	"strings"
@@ -21,6 +22,7 @@ type Station struct {
 }
 
 type stationReq struct {
+	TenantID              int64  `json:"tenantId"`
 	Name                  string `json:"name"`
 	Address               string `json:"address"`
 	DefaultStartTime      string `json:"defaultStartTime"`
@@ -68,14 +70,15 @@ func (a *App) getStation(id, tenantID int64) (Station, error) {
 
 func (a *App) listStations(w http.ResponseWriter, r *http.Request) {
 	s := current(r)
-	query := `SELECT id,tenant_id,name,address,default_start_time,start_threshold_cents,stop_threshold_cents,
-		warn_threshold_cents,settlement_timeout_hours,price_cents_per_kwh,status FROM stations`
+	query := `SELECT st.id,st.tenant_id,st.name,st.address,st.default_start_time,st.start_threshold_cents,st.stop_threshold_cents,
+		st.warn_threshold_cents,st.settlement_timeout_hours,st.price_cents_per_kwh,st.status,COALESCE(t.name,'')
+		FROM stations st LEFT JOIN tenants t ON t.id=st.tenant_id`
 	args := []any{}
 	if s.Role != "super" {
-		query += ` WHERE tenant_id=?`
+		query += ` WHERE st.tenant_id=?`
 		args = append(args, s.TenantID)
 	}
-	query += ` ORDER BY id DESC`
+	query += ` ORDER BY st.id DESC`
 	rows, err := a.DB.Query(query, args...)
 	if err != nil {
 		writeErr(w, err)
@@ -85,12 +88,15 @@ func (a *App) listStations(w http.ResponseWriter, r *http.Request) {
 	out := make([]map[string]any, 0)
 	for rows.Next() {
 		var st Station
+		var tenantName string
 		if err = rows.Scan(&st.ID, &st.TenantID, &st.Name, &st.Address, &st.DefaultStartTime, &st.StartThresholdCents,
-			&st.StopThresholdCents, &st.WarnThresholdCents, &st.SettlementTimeoutHrs, &st.PriceCentsPerKWh, &st.Status); err != nil {
+			&st.StopThresholdCents, &st.WarnThresholdCents, &st.SettlementTimeoutHrs, &st.PriceCentsPerKWh, &st.Status, &tenantName); err != nil {
 			writeErr(w, err)
 			return
 		}
-		out = append(out, stationMap(st))
+		m := stationMap(st)
+		m["tenantName"] = tenantName
+		out = append(out, m)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -116,9 +122,14 @@ func (a *App) createStation(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, fail(400, "场站名称不能为空"))
 		return
 	}
+	tenantID, err := scopeTenant(r, req.TenantID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 	res, err := a.DB.Exec(`INSERT INTO stations(tenant_id,name,address,default_start_time,start_threshold_cents,
 		stop_threshold_cents,warn_threshold_cents,settlement_timeout_hours,price_cents_per_kwh,status,created_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?)`, current(r).TenantID, req.Name, req.Address, req.DefaultStartTime,
+		VALUES(?,?,?,?,?,?,?,?,?,?,?)`, tenantID, req.Name, req.Address, req.DefaultStartTime,
 		req.StartThresholdCents, req.StopThresholdCents, req.WarnThresholdCents, req.SettlementTimeoutHrs,
 		req.PriceCentsPerKWh, req.Status, now())
 	if err != nil {
@@ -142,11 +153,19 @@ func (a *App) updateStation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	normalizeStation(&req)
-	_, err = a.DB.Exec(`UPDATE stations SET name=?,address=?,default_start_time=?,start_threshold_cents=?,
-		stop_threshold_cents=?,warn_threshold_cents=?,settlement_timeout_hours=?,price_cents_per_kwh=?,status=?
-		WHERE id=? AND tenant_id=?`, req.Name, req.Address, req.DefaultStartTime, req.StartThresholdCents,
-		req.StopThresholdCents, req.WarnThresholdCents, req.SettlementTimeoutHrs, req.PriceCentsPerKWh,
-		req.Status, id, current(r).TenantID)
+	if current(r).Role == "super" {
+		_, err = a.DB.Exec(`UPDATE stations SET name=?,address=?,default_start_time=?,start_threshold_cents=?,
+			stop_threshold_cents=?,warn_threshold_cents=?,settlement_timeout_hours=?,price_cents_per_kwh=?,status=?
+			WHERE id=?`, req.Name, req.Address, req.DefaultStartTime, req.StartThresholdCents,
+			req.StopThresholdCents, req.WarnThresholdCents, req.SettlementTimeoutHrs, req.PriceCentsPerKWh,
+			req.Status, id)
+	} else {
+		_, err = a.DB.Exec(`UPDATE stations SET name=?,address=?,default_start_time=?,start_threshold_cents=?,
+			stop_threshold_cents=?,warn_threshold_cents=?,settlement_timeout_hours=?,price_cents_per_kwh=?,status=?
+			WHERE id=? AND tenant_id=?`, req.Name, req.Address, req.DefaultStartTime, req.StartThresholdCents,
+			req.StopThresholdCents, req.WarnThresholdCents, req.SettlementTimeoutHrs, req.PriceCentsPerKWh,
+			req.Status, id, current(r).TenantID)
+	}
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -155,6 +174,7 @@ func (a *App) updateStation(w http.ResponseWriter, r *http.Request) {
 }
 
 type pileReq struct {
+	TenantID  int64  `json:"tenantId"`
 	StationID int64  `json:"stationId"`
 	DeviceNo  string `json:"deviceNo"`
 	GunCount  int    `json:"gunCount"`
@@ -162,9 +182,17 @@ type pileReq struct {
 
 func (a *App) listPiles(w http.ResponseWriter, r *http.Request) {
 	s := current(r)
-	rows, err := a.DB.Query(`SELECT p.id,p.station_id,p.device_no,p.status,p.last_seen_at,COALESCE(s.name,''),
-		(SELECT COUNT(*) FROM guns g WHERE g.pile_id=p.id) FROM piles p LEFT JOIN stations s ON s.id=p.station_id
-		WHERE p.tenant_id=? ORDER BY p.id DESC`, s.TenantID)
+	query := `SELECT p.id,p.station_id,p.device_no,p.status,p.last_seen_at,COALESCE(s.name,''),
+		COALESCE(t.name,''),p.tenant_id,
+		(SELECT COUNT(*) FROM guns g WHERE g.pile_id=p.id) FROM piles p
+		LEFT JOIN stations s ON s.id=p.station_id LEFT JOIN tenants t ON t.id=p.tenant_id`
+	args := []any{}
+	if s.Role != "super" {
+		query += ` WHERE p.tenant_id=?`
+		args = append(args, s.TenantID)
+	}
+	query += ` ORDER BY p.id DESC`
+	rows, err := a.DB.Query(query, args...)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -172,15 +200,15 @@ func (a *App) listPiles(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	out := make([]map[string]any, 0)
 	for rows.Next() {
-		var id, stationID int64
-		var deviceNo, status, lastSeen, stationName string
+		var id, stationID, tenantID int64
+		var deviceNo, status, lastSeen, stationName, tenantName string
 		var gunCount int
-		if err = rows.Scan(&id, &stationID, &deviceNo, &status, &lastSeen, &stationName, &gunCount); err != nil {
+		if err = rows.Scan(&id, &stationID, &deviceNo, &status, &lastSeen, &stationName, &tenantName, &tenantID, &gunCount); err != nil {
 			writeErr(w, err)
 			return
 		}
 		out = append(out, map[string]any{"id": id, "stationId": stationID, "deviceNo": deviceNo, "status": status,
-			"lastSeenAt": lastSeen, "stationName": stationName, "gunCount": gunCount})
+			"lastSeenAt": lastSeen, "stationName": stationName, "tenantName": tenantName, "tenantId": tenantID, "gunCount": gunCount})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -195,7 +223,20 @@ func (a *App) createPile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, fail(400, "请选择场站"))
 		return
 	}
-	if _, err := a.getStation(req.StationID, current(r).TenantID); err != nil {
+	// 桩必须归属其场站所在租户：普通角色锁定本租户，超管从场站反推租户。
+	tenantID := current(r).TenantID
+	st, err := a.getStation(req.StationID, tenantID)
+	if err != nil && current(r).Role == "super" {
+		// 超管可跨租户，按场站 ID 直接查其归属租户。
+		err = a.DB.QueryRow(`SELECT id,tenant_id,name,address,default_start_time,start_threshold_cents,stop_threshold_cents,
+			warn_threshold_cents,settlement_timeout_hours,price_cents_per_kwh,status FROM stations WHERE id=?`, req.StationID).
+			Scan(&st.ID, &st.TenantID, &st.Name, &st.Address, &st.DefaultStartTime, &st.StartThresholdCents,
+				&st.StopThresholdCents, &st.WarnThresholdCents, &st.SettlementTimeoutHrs, &st.PriceCentsPerKWh, &st.Status)
+		if err == nil {
+			tenantID = st.TenantID
+		}
+	}
+	if err != nil {
 		writeErr(w, fail(404, "场站不存在"))
 		return
 	}
@@ -210,7 +251,6 @@ func (a *App) createPile(w http.ResponseWriter, r *http.Request) {
 		req.DeviceNo = "CH" + strings.ToUpper(randomHex(6))
 	}
 	secret := randomHex(16)
-	tenantID := current(r).TenantID
 	tx, err := a.DB.Begin()
 	if err != nil {
 		writeErr(w, err)
@@ -255,7 +295,12 @@ func (a *App) updatePile(w http.ResponseWriter, r *http.Request) {
 	if req.Status == "" {
 		req.Status = "active"
 	}
-	if _, err = a.DB.Exec(`UPDATE piles SET status=? WHERE id=? AND tenant_id=?`, req.Status, id, current(r).TenantID); err != nil {
+	if current(r).Role == "super" {
+		_, err = a.DB.Exec(`UPDATE piles SET status=? WHERE id=?`, req.Status, id)
+	} else {
+		_, err = a.DB.Exec(`UPDATE piles SET status=? WHERE id=? AND tenant_id=?`, req.Status, id, current(r).TenantID)
+	}
+	if err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -269,7 +314,12 @@ func (a *App) regenerateSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	secret := randomHex(16)
-	res, err := a.DB.Exec(`UPDATE piles SET secret=? WHERE id=? AND tenant_id=?`, secret, id, current(r).TenantID)
+	var res sql.Result
+	if current(r).Role == "super" {
+		res, err = a.DB.Exec(`UPDATE piles SET secret=? WHERE id=?`, secret, id)
+	} else {
+		res, err = a.DB.Exec(`UPDATE piles SET secret=? WHERE id=? AND tenant_id=?`, secret, id, current(r).TenantID)
+	}
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -286,8 +336,12 @@ func (a *App) listGuns(w http.ResponseWriter, r *http.Request) {
 	s := current(r)
 	stationID, _ := strconv.ParseInt(r.URL.Query().Get("stationId"), 10, 64)
 	query := `SELECT g.id,g.pile_id,g.gun_no,g.status,p.device_no,COALESCE(st.name,''),p.station_id
-		FROM guns g JOIN piles p ON p.id=g.pile_id LEFT JOIN stations st ON st.id=p.station_id WHERE g.tenant_id=?`
-	args := []any{s.TenantID}
+		FROM guns g JOIN piles p ON p.id=g.pile_id LEFT JOIN stations st ON st.id=p.station_id WHERE 1=1`
+	args := []any{}
+	if s.Role != "super" {
+		query += ` AND g.tenant_id=?`
+		args = append(args, s.TenantID)
+	}
 	if stationID > 0 {
 		query += ` AND p.station_id=?`
 		args = append(args, stationID)

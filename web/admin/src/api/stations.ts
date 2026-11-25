@@ -2,6 +2,7 @@ import { http } from './request'
 import type { Station } from './types'
 
 export interface StationInput {
+  tenantId?: number
   name: string
   address: string
   defaultStartTime: string
