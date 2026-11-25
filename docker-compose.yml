@@ -1,0 +1,13 @@
+services:
+  charginghub:
+    image: ghcr.io/jshmcz/charginghub:v1
+    container_name: charginghub
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "8768:8768"
+    environment:
+      TZ: Asia/Shanghai
+      SECRET_KEY: "请改成你自己的随机字符串"
+    volumes:
+      - ./data:/app/data
