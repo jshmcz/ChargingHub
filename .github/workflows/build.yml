@@ -1,12 +1,15 @@
 name: Build ChargingHub
 
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "镜像标签，例如 v1"
+        description: "镜像标签，例如 v1.1"
         required: true
-        default: "v1"
+        default: "v1.1"
 
 permissions:
   contents: read
@@ -35,7 +38,7 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/jshmcz/charginghub:${{ github.event.inputs.image_tag }}
+            ghcr.io/jshmcz/charginghub:${{ github.event.inputs.image_tag || github.ref_name }}
             ghcr.io/jshmcz/charginghub:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max

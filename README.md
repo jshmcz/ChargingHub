@@ -33,9 +33,9 @@ cd web/mobile && npm install && npm run dev
 
 代码推送到 GitHub 后：
 
-1. 仓库 → Actions → **Build ChargingHub** → **Run workflow**
-2. 填写 `image_tag`（例如 `v1`）→ 点绿色按钮
-3. 编译成功后镜像推送到 `ghcr.io/jshmcz/charginghub:v1` 和 `:latest`
+1. 推送 `v*` 标签（例如 `git tag v1.1 && git push origin v1.1`），或在仓库 → Actions → **Build ChargingHub** → **Run workflow**
+2. 手动触发时填写 `image_tag`（例如 `v1.1`）→ 点绿色按钮
+3. 编译成功后镜像推送到 `ghcr.io/jshmcz/charginghub:v1.1` 和 `:latest`
 
 在服务器/NAS 上：
 
