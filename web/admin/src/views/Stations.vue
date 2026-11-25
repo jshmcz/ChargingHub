@@ -10,6 +10,9 @@
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column v-if="auth.isSuper" prop="tenantName" label="所属租户" min-width="140" />
         <el-table-column prop="name" label="名称" min-width="140" />
+        <el-table-column label="所在地区" min-width="140">
+          <template #default="{ row }">{{ row.areaName || '-' }}</template>
+        </el-table-column>
         <el-table-column prop="address" label="地址" min-width="180" />
         <el-table-column prop="defaultStartTime" label="默认启动" width="110" />
         <el-table-column label="启动门槛" width="120">
@@ -58,8 +61,21 @@
             </el-form-item>
           </el-col>
           <el-col :xs="24" :sm="12">
-            <el-form-item label="地址" prop="address">
-              <el-input v-model="form.address" />
+            <el-form-item label="所在地区" prop="areaCodes">
+              <el-cascader
+                v-model="form.areaCodes"
+                :options="areaOptions"
+                :props="{ expandTrigger: 'hover' }"
+                placeholder="选择省 / 市 / 区县"
+                style="width: 100%"
+                clearable
+                filterable
+              />
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="详细地址" prop="address">
+              <el-input v-model="form.address" placeholder="街道、门牌号等" />
             </el-form-item>
           </el-col>
           <el-col :xs="24" :sm="12">
@@ -109,10 +125,12 @@ import type { Station } from '@/api/types'
 import { centsToYuan, formatCents, yuanToCents } from '@/utils/format'
 import { useAuthStore } from '@/stores/auth'
 
+interface AreaNode { value: string; label: string; children?: AreaNode[] }
 const auth = useAuthStore()
 const loading = ref(false)
 const list = ref<Station[]>([])
 const tenants = ref<{ id: number; name: string }[]>([])
+const areaOptions = ref<AreaNode[]>([])
 const page = ref(1)
 const pageSize = 10
 const pagedList = computed(() =>
@@ -136,10 +154,40 @@ async function load() {
 
 onMounted(() => {
   load()
+  fetch('/areas.json').then((r) => r.json()).then((d) => { areaOptions.value = d }).catch(() => {})
   if (auth.isSuper) {
     tenantsApi.list().then((rows) => { tenants.value = rows }).catch(() => {})
   }
 })
+
+function resolveArea(codes: string[]): { code: string; name: string } {
+  if (!codes.length) return { code: '', name: '' }
+  let nodes = areaOptions.value
+  const labels: string[] = []
+  for (const code of codes) {
+    const hit = nodes.find((n) => n.value === code)
+    if (!hit) break
+    labels.push(hit.label)
+    nodes = hit.children || []
+  }
+  return { code: codes[codes.length - 1], name: labels.join(' / ') }
+}
+
+// 根据末级区划码反查完整级联路径（省/市/区）
+function areaCodesFromCode(code: string): string[] {
+  if (!code) return []
+  const path: string[] = []
+  function walk(nodes: AreaNode[], trail: string[]): boolean {
+    for (const n of nodes) {
+      const next = [...trail, n.value]
+      if (n.value === code) { path.push(...next); return true }
+      if (n.children && walk(n.children, next)) return true
+    }
+    return false
+  }
+  walk(areaOptions.value, [])
+  return path
+}
 
 const dialogVisible = ref(false)
 const editing = ref<Station | null>(null)
@@ -149,6 +197,7 @@ const form = reactive({
   tenantId: 0,
   name: '',
   address: '',
+  areaCodes: [] as string[],
   defaultStartTime: '22:00',
   settlementTimeoutHours: 24,
   startYuan: 50,
@@ -159,7 +208,8 @@ const form = reactive({
 const rules: FormRules = {
   tenantId: [{ validator: (_r, v, cb) => (!auth.isSuper || editing.value || v > 0) ? cb() : cb(new Error('请选择所属租户')), trigger: 'change' }],
   name: [{ required: true, message: '请输入场站名称', trigger: 'blur' }],
-  address: [{ required: true, message: '请输入地址', trigger: 'blur' }],
+  address: [{ required: true, message: '请输入详细地址', trigger: 'blur' }],
+  areaCodes: [{ type: 'array', required: true, message: '请选择所在地区（用于生成桩编号）', trigger: 'change' }],
   defaultStartTime: [{ required: true, message: '请输入默认启动时刻', trigger: 'blur' }],
 }
 
@@ -169,6 +219,7 @@ function openCreate() {
     tenantId: tenants.value[0]?.id || 0,
     name: '',
     address: '',
+    areaCodes: [],
     defaultStartTime: '22:00',
     settlementTimeoutHours: 24,
     startYuan: 50,
@@ -183,6 +234,7 @@ function openEdit(row: Station) {
   Object.assign(form, {
     name: row.name,
     address: row.address,
+    areaCodes: areaCodesFromCode(row.areaCode || ''),
     defaultStartTime: row.defaultStartTime,
     settlementTimeoutHours: row.settlementTimeoutHours,
     startYuan: centsToYuan(row.startThresholdCents),
@@ -199,10 +251,13 @@ async function save() {
   } catch {
     return
   }
+  const area = resolveArea(form.areaCodes)
   const payload: StationInput = {
     tenantId: form.tenantId,
     name: form.name,
     address: form.address,
+    areaCode: area.code,
+    areaName: area.name,
     defaultStartTime: form.defaultStartTime,
     settlementTimeoutHours: form.settlementTimeoutHours,
     startThresholdCents: yuanToCents(form.startYuan),

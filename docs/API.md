@@ -33,23 +33,29 @@
 - `POST /api/tenants` body `{name,status,adminName,adminPhone,adminEmail,adminPassword}`：一步创建租户+管理员账号，租户ID自增，管理员自动关联该租户（role=tenant_admin），用 adminPhone/adminPassword 登录即自动归属该租户。`adminEmail` 用于接收通知。返回 `{id,name,adminPhone,adminUserId}`
 - `POST /api/users` body `{phone,email,password,role,tenantId,name}`（超管/租户管理员创建用户；超管需传 tenantId，列表对超管显示全部租户用户并带 tenantName）
 - 超管（role=super）拥有全部接口权限；各列表接口（场站/桩/枪/用户/钱包/流水/预约/订单/通知）对超管返回全部租户数据并带 tenantName/tenantId。超管写操作需显式传 tenantId（场站/钱包），桩按所属场站反推租户。
+- `GET|PUT /api/platform/config`（仅超管）：全局对外域名，用于生成二维码。body `{baseUrl}`，如 `https://ff.dadaf.com:9010`。必须先配置才能下载二维码。
 
 ## 租户管理（tenant_admin / operator）
 
-用户由租户创建，创建时自动建该租户钱包：
+用户由租户创建；**钱包在首次充值时自动创建**，建用户时不建：
 
-- `POST /api/users` body `{phone,email,password,name}` → `{id,phone,email,name}`
+- `POST /api/users` body `{phone,email,password,name,confirmPhone?}` → `{id,phone,email,name}`
+  - 若该手机号已属于其他租户，须传 `confirmPhone` 且等于完整手机号才能关联到本租户（防止误把他人加进来）。未传时返回 409 提示。
 - `GET /api/users?keyword=` → 用户列表（含钱包余额）
 - `PUT /api/users/{id}` body `{status,email,name}`
 
 场站 / 桩 / 枪：
 
 - `GET|POST /api/stations`；POST body：
-  `{name,address,defaultStartTime:"22:00",startThresholdCents:5000,stopThresholdCents:2000,warnThresholdCents:3000,settlementTimeoutHours:24,priceCentsPerKwh:150}`
+  `{name,address,areaCode:"320106",areaName:"安徽省 / 合肥市 / 蜀山区",defaultStartTime:"22:00",startThresholdCents:5000,stopThresholdCents:2000,warnThresholdCents:3000,settlementTimeoutHours:24,priceCentsPerKwh:150}`
+  - `areaCode` 为 6 位行政区划码（PC 端按地址级联选择自动带出），是桩编号前缀。
 - `PUT /api/stations/{id}`（同上字段）
-- `GET|POST /api/piles`；POST body `{stationId,deviceNo,gunCount}` → 生成桩和枪，设备密钥由服务端生成
+- `GET|POST /api/piles`；POST body `{stationId,gunCount}` → 服务端自动生成桩和枪，**不接受 deviceNo**
+  - 桩编号 16 位 = 场站 `areaCode`(6) + 全局流水(10，补 0)；枪编号 18 位 = 桩编号 + 枪序号(2，每桩从 01 起)。
+  - 每把枪生成唯一 `qr_token`。返回 `{id,deviceNo,secret,gunCount,gunCodes[],qrTokens[]}`。
 - `PUT /api/piles/{id}` body `{status}`
-- `GET /api/guns?stationId=`
+- `GET /api/guns?stationId=` → 枪列表含 `gunCode`(18位)、`qrToken`
+- `GET /api/guns/{id}/qrcode` → 该枪二维码 PNG（内容 = 全局域名 + `/m/#/charge?token=<qrToken>`，单个下载；需先配域名）
 - `POST /api/piles/{id}/regenerate-secret`（重置设备密钥）
 
 钱包（现金流水，`operator` 无退款/SMTP 权限）：
@@ -81,6 +87,7 @@
 - `GET /api/stations` → 本租户场站（含枪状态）
 - `GET /api/my/wallet`，`GET /api/my/ledgers`
 - `GET /api/my/orders`，`GET /api/my/reservations`（与 `/api/orders`、`/api/reservations` 等价，自动按当前用户过滤）
+- `GET /api/gun/by-token?token=` → 扫码后按枪令牌定位枪，返回枪编号/场站/状态/当前钱包余额（自动锁定本租户）
 - `POST /api/reservations` body `{stationId,gunId}`（同管理员接口，自动绑定当前用户）→ `{id,startAt,status}`
 - `POST /api/reservations/{id}/cancel`
 - `POST /api/charge/start` body `{gunId}` → `{id,orderId,status}`，立即启动，校验余额 ≥ 场站启动门槛
@@ -90,8 +97,11 @@
 
 1. **互踢**：同设备免踢；不同设备登录踢掉该用户所有旧会话。
 2. **预约**：场站级固定时刻，用户不可改；当天过点顺延次日；预约单未关闭时禁止退款。
-3. **钱包**：tenant_id + user_id 唯一；所有变动写 append-only 流水；余额以流水为准。
+3. **钱包**：tenant_id + user_id 唯一；建用户时不建钱包，首次充值时按当前租户自动创建；所有变动写 append-only 流水；余额以流水为准。
 4. **启动**：余额 ≥ 场站 `startThresholdCents`（默认 50 元）。
+5. **跨租户同手机号**：用户主档按手机号全局唯一，可在多个租户各有一份关联和独立钱包；其他租户首次关联该手机号时须完整输入手机号二次确认。
+6. **编号**：桩号 = 6 位区划码 + 10 位流水 = 16 位；枪号 = 桩号 + 2 位枪序号 = 18 位；设备通信与展示统一用 18 位枪号。
+7. **二维码**：内容 = 全局域名 + `/m/#/charge?token=<随机令牌>`；扫码定位按令牌查库；域名由超管前置配置，改域名后旧码失效。
 5. **断电**：充电中余额 < 场站 `stopThresholdCents`（默认 20 元）自动断电并生成待结算订单；< `warnThresholdCents`（默认 30 元）发提醒。
 6. **退款**：仅退当前余额；存在 `charging` / `pending_settle` 订单或 `pending` / `active` 预约时拒绝；已结算订单不拦截。
 7. **结算**：设备上报结束后超过 `settlementTimeoutHours`（默认 24h）自动按最后上报数据结算。

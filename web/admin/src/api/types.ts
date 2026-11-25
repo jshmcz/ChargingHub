@@ -55,6 +55,8 @@ export interface Station {
   id: number
   name: string
   address: string
+  areaCode?: string
+  areaName?: string
   defaultStartTime: string
   startThresholdCents: number
   stopThresholdCents: number
@@ -67,7 +69,9 @@ export interface Gun {
   id: number
   pileId: number
   stationId: number
-  gunNo: string
+  gunNo: number
+  gunCode?: string
+  qrToken?: string
   status: GunStatus
 }
 

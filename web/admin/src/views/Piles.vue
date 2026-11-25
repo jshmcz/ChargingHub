@@ -69,11 +69,11 @@
             <el-option v-for="station in stations" :key="station.id" :label="station.name" :value="station.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="设备编号" prop="deviceNo">
-          <el-input v-model="form.deviceNo" placeholder="设备唯一编号" />
-        </el-form-item>
         <el-form-item label="枪数量" prop="gunCount">
           <el-input-number v-model="form.gunCount" :min="1" :max="32" />
+          <div class="text-muted" style="margin-top: 4px; font-size: 12px">
+            桩编号按场站区划码自动生成，每把枪自动分配 18 位编号和二维码
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -89,15 +89,25 @@
         场站：{{ gunStationName }} · 设备：{{ gunDeviceNo }}
       </div>
       <div class="table-wrap">
-        <el-table :data="guns" border size="small" min-width="560">
-          <el-table-column prop="id" label="ID" width="80" />
-          <el-table-column prop="gunNo" label="枪编号" min-width="140" />
-          <el-table-column label="状态" width="120">
+        <el-table :data="guns" border size="small" min-width="620">
+          <el-table-column prop="gunCode" label="枪编号(18位)" min-width="200">
+            <template #default="{ row }">
+              <span class="gun-code">{{ row.gunCode || '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="序号" width="80">
+            <template #default="{ row }">{{ row.gunNo }}</template>
+          </el-table-column>
+          <el-table-column label="状态" width="110">
             <template #default="{ row }">
               <el-tag>{{ gunStatusText(row.status) }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="pileId" label="桩ID" width="100" />
+          <el-table-column label="二维码" width="120" fixed="right">
+            <template #default="{ row }">
+              <el-button link type="primary" size="small" @click="downloadQr(row)">下载</el-button>
+            </template>
+          </el-table-column>
         </el-table>
       </div>
     </el-dialog>
@@ -227,18 +237,26 @@ async function openGuns(pile: Pile) {
   }
 }
 
+async function downloadQr(gun: Gun) {
+  try {
+    await pilesApi.downloadQrcode(gun.id, `枪-${gun.gunCode || gun.id}.png`)
+    ElMessage.success('二维码已下载')
+  } catch (error) {
+    ElMessage.error(errorText(error))
+  }
+}
+
 const createVisible = ref(false)
 const saving = ref(false)
 const formRef = ref<FormInstance>()
-const form = reactive({ stationId: 0, deviceNo: '', gunCount: 1 })
+const form = reactive({ stationId: 0, gunCount: 1 })
 
 const rules: FormRules = {
   stationId: [{ required: true, message: '请选择场站', trigger: 'change' }],
-  deviceNo: [{ required: true, message: '请输入设备编号', trigger: 'blur' }],
 }
 
 function openCreate() {
-  Object.assign(form, { stationId: filterStationId.value || 0, deviceNo: '', gunCount: 1 })
+  Object.assign(form, { stationId: filterStationId.value || 0, gunCount: 1 })
   createVisible.value = true
 }
 
@@ -251,7 +269,6 @@ async function create() {
   }
   const payload: PileInput = {
     stationId: form.stationId,
-    deviceNo: form.deviceNo,
     gunCount: form.gunCount,
   }
   saving.value = true

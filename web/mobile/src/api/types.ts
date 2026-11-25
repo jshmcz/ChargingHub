@@ -36,6 +36,8 @@ export interface Gun {
   gunNo?: number | string
   no?: number | string
   name?: string
+  gunCode?: string
+  qrToken?: string
   status: GunStatus
   stationId?: string
   pileId?: string
@@ -55,6 +57,8 @@ export interface Station {
   id: string
   name: string
   address: string
+  areaCode?: string
+  areaName?: string
   defaultStartTime: string
   startThresholdCents: number
   stopThresholdCents: number
@@ -71,7 +75,6 @@ export type StationPayload = Omit<Station, 'id' | 'status' | 'piles' | 'guns' | 
 
 export interface PilePayload {
   stationId: string
-  deviceNo: string
   gunCount: number
 }
 

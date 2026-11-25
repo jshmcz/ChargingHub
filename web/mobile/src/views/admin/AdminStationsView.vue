@@ -31,6 +31,8 @@ const stationForm = reactive({
   id: '',
   name: '',
   address: '',
+  areaCode: '',
+  areaName: '',
   defaultStartTime: '22:00',
   startThresholdCents: '5000',
   stopThresholdCents: '2000',
@@ -41,7 +43,7 @@ const stationForm = reactive({
 const pileOpen = ref(false)
 const pileStationId = ref('')
 const savingPile = ref(false)
-const pileForm = reactive({ deviceNo: '', gunCount: '3' })
+const pileForm = reactive({ gunCount: '1' })
 const pileStatusMap = reactive<Record<string, string>>({})
 
 const currentStation = computed(
@@ -55,6 +57,8 @@ function resetStationForm(): void {
   stationForm.id = ''
   stationForm.name = ''
   stationForm.address = ''
+  stationForm.areaCode = ''
+  stationForm.areaName = ''
   stationForm.defaultStartTime = '22:00'
   stationForm.startThresholdCents = '5000'
   stationForm.stopThresholdCents = '2000'
@@ -71,6 +75,8 @@ function openEdit(station: Station): void {
   stationForm.id = station.id
   stationForm.name = station.name || ''
   stationForm.address = station.address || ''
+  stationForm.areaCode = station.areaCode || ''
+  stationForm.areaName = station.areaName || ''
   stationForm.defaultStartTime = station.defaultStartTime || '22:00'
   stationForm.startThresholdCents = String(station.startThresholdCents ?? 5000)
   stationForm.stopThresholdCents = String(station.stopThresholdCents ?? 2000)
@@ -94,9 +100,16 @@ function buildStationPayload(): StationPayload | null {
     showToast('请填写场站名称')
     return null
   }
+  const areaCode = stationForm.areaCode.trim()
+  if (!/^\d{6}$/.test(areaCode)) {
+    showToast('请填写 6 位行政区划码（如 320106，用于生成桩编号）')
+    return null
+  }
   return {
     name: stationForm.name.trim(),
     address: stationForm.address.trim(),
+    areaCode,
+    areaName: stationForm.areaName.trim() || areaCode,
     defaultStartTime: stationForm.defaultStartTime.trim() || '22:00',
     startThresholdCents: numbers[0],
     stopThresholdCents: numbers[1],
@@ -147,26 +160,23 @@ async function onRefresh(): Promise<void> {
 
 function openPiles(station: Station): void {
   pileStationId.value = station.id
-  pileForm.deviceNo = ''
-  pileForm.gunCount = '3'
+  pileForm.gunCount = '1'
   pileOpen.value = true
 }
 
 async function createPile(): Promise<void> {
   const gunCount = Number(pileForm.gunCount)
-  if (!pileForm.deviceNo.trim() || !Number.isInteger(gunCount) || gunCount <= 0) {
-    showToast('请填写设备编号和有效枪数')
+  if (!Number.isInteger(gunCount) || gunCount <= 0 || gunCount > 32) {
+    showToast('请填写有效枪数（1-32）')
     return
   }
   savingPile.value = true
   try {
     await stationApi.createPile({
       stationId: pileStationId.value,
-      deviceNo: pileForm.deviceNo.trim(),
       gunCount,
     })
-    showToast({ type: 'success', message: '充电桩已创建' })
-    pileForm.deviceNo = ''
+    showToast({ type: 'success', message: '充电桩已创建，编号自动生成' })
     await load()
   } catch {
     // 统一由 request.ts 提示
@@ -254,7 +264,10 @@ onMounted(load)
       <div class="popup-title">{{ stationForm.id ? '编辑场站' : '新建场站' }}</div>
       <div class="popup-form">
         <Field v-model="stationForm.name" label="名称" placeholder="请输入场站名称" />
-        <Field v-model="stationForm.address" label="地址" placeholder="请输入地址" />
+        <Field v-model="stationForm.areaCode" label="区划码" type="digit" maxlength="6" placeholder="6位，如 320106" />
+        <Field v-model="stationForm.areaName" label="所在地区" placeholder="如 安徽省 / 合肥市 / 蜀山区" />
+        <div class="muted" style="padding: 0 16px 8px; font-size: 12px">区划码是桩编号前缀，六位数字，可在 PC 管理端按地址自动选择</div>
+        <Field v-model="stationForm.address" label="详细地址" placeholder="街道、门牌号等" />
         <Field v-model="stationForm.defaultStartTime" label="启动时刻" placeholder="22:00" />
         <Field v-model="stationForm.startThresholdCents" label="启动门槛(分)" type="digit" />
         <Field v-model="stationForm.stopThresholdCents" label="断电门槛(分)" type="digit" />
@@ -271,8 +284,8 @@ onMounted(load)
       <div class="popup-title">桩管理 · {{ currentStation?.name || '' }}</div>
       <div class="pile-area">
         <div class="section-title">新增充电桩</div>
-        <Field v-model="pileForm.deviceNo" label="设备编号" placeholder="请输入设备编号" />
-        <Field v-model="pileForm.gunCount" label="枪数量" type="digit" placeholder="3" />
+        <Field v-model="pileForm.gunCount" label="枪数量" type="digit" placeholder="1" />
+        <div class="muted" style="padding: 0 16px 8px; font-size: 12px">桩编号按场站区划码自动生成，每把枪自动分配 18 位编号</div>
         <div class="pile-actions">
           <Button block type="primary" :loading="savingPile" @click="createPile">添加桩</Button>
         </div>

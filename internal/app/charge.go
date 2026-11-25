@@ -204,7 +204,7 @@ func (a *App) startCharge(w http.ResponseWriter, r *http.Request) {
 	}
 	_, _ = a.DB.Exec(`UPDATE guns SET status='charging' WHERE id=?`, g.ID)
 	if a.Sender != nil {
-		a.Sender.SendCommand(g.DeviceNo, g.GunNo, "START", strconv.FormatInt(orderID, 10))
+		a.Sender.SendCommand(g.DeviceNo, g.GunCode, "START", strconv.FormatInt(orderID, 10))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": orderID, "orderId": orderID, "status": "charging"})
 	a.enqueueNotify(s.TenantID, a.userIDOfTenantUser(tuID), "charge_started", "充电已启动", "场站「"+st.Name+"」充电已启动，订单号 "+strconv.FormatInt(orderID, 10)+"。")
@@ -237,7 +237,7 @@ func (a *App) stopCharge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a.Sender != nil {
-		a.Sender.SendCommand(g.DeviceNo, g.GunNo, "STOP", strconv.FormatInt(orderID, 10))
+		a.Sender.SendCommand(g.DeviceNo, g.GunCode, "STOP", strconv.FormatInt(orderID, 10))
 	}
 	_, _ = a.DB.Exec(`UPDATE orders SET status='pending_settle',end_at=? WHERE id=?`, now(), orderID)
 	_, _ = a.DB.Exec(`UPDATE guns SET status='idle' WHERE id=?`, g.ID)
@@ -403,8 +403,8 @@ func (a *App) schedulerTick() {
 			continue
 		}
 		var gun gunInfo
-		if err = a.DB.QueryRow(`SELECT g.id,g.tenant_id,g.gun_no,g.status,p.device_no,p.station_id FROM guns g
-			JOIN piles p ON p.id=g.pile_id WHERE g.id=?`, d.gid).Scan(&gun.ID, &gun.TenantID, &gun.GunNo, &gun.Status, &gun.DeviceNo, &gun.StationID); err != nil {
+		if err = a.DB.QueryRow(`SELECT g.id,g.tenant_id,g.gun_no,g.gun_code,g.status,p.device_no,p.station_id FROM guns g
+			JOIN piles p ON p.id=g.pile_id WHERE g.id=?`, d.gid).Scan(&gun.ID, &gun.TenantID, &gun.GunNo, &gun.GunCode, &gun.Status, &gun.DeviceNo, &gun.StationID); err != nil {
 			a.closeReservation(d.id, "failed")
 			continue
 		}
@@ -415,7 +415,7 @@ func (a *App) schedulerTick() {
 		_, _ = a.DB.Exec(`UPDATE reservations SET status='active',started_at=? WHERE id=?`, now(), d.id)
 		_, _ = a.DB.Exec(`UPDATE guns SET status='charging' WHERE id=?`, d.gid)
 		if a.Sender != nil {
-			a.Sender.SendCommand(gun.DeviceNo, gun.GunNo, "START", strconv.FormatInt(orderID, 10))
+			a.Sender.SendCommand(gun.DeviceNo, gun.GunCode, "START", strconv.FormatInt(orderID, 10))
 		}
 		a.enqueueNotify(d.tid, a.userIDOfTenantUser(d.tu), "charge_started", "预约充电已启动",
 			"场站「"+st.Name+"」预约充电已启动，订单号 "+strconv.FormatInt(orderID, 10)+"。")
@@ -491,11 +491,10 @@ func (a *App) closeReservation(id int64, status string) {
 func (a *App) stopOrderByScheduler(orderID, gunID int64, reason string) {
 	var tuID, tid int64
 	_ = a.DB.QueryRow(`SELECT tenant_user_id,tenant_id FROM orders WHERE id=?`, orderID).Scan(&tuID, &tid)
-	var deviceNo string
-	var gunNo int
-	_ = a.DB.QueryRow(`SELECT p.device_no,g.gun_no FROM guns g JOIN piles p ON p.id=g.pile_id WHERE g.id=?`, gunID).Scan(&deviceNo, &gunNo)
+	var deviceNo, gunCode string
+	_ = a.DB.QueryRow(`SELECT p.device_no,g.gun_code FROM guns g JOIN piles p ON p.id=g.pile_id WHERE g.id=?`, gunID).Scan(&deviceNo, &gunCode)
 	if a.Sender != nil {
-		a.Sender.SendCommand(deviceNo, gunNo, "STOP", strconv.FormatInt(orderID, 10))
+		a.Sender.SendCommand(deviceNo, gunCode, "STOP", strconv.FormatInt(orderID, 10))
 	}
 	_, _ = a.DB.Exec(`UPDATE orders SET status='pending_settle',end_at=? WHERE id=?`, now(), orderID)
 	_, _ = a.DB.Exec(`UPDATE guns SET status='idle' WHERE id=?`, gunID)

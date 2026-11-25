@@ -9,6 +9,8 @@ export interface CreateUserPayload {
   /** 仅超管创建租户管理员时需要 */
   role?: Role
   tenantId?: number | string
+  /** 跨租户复用同手机号时的完整手机号二次确认 */
+  confirmPhone?: string
 }
 
 export interface UpdateUserPayload {

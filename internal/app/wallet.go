@@ -1,6 +1,7 @@
 package app
 
 import (
+	"database/sql"
 	"net/http"
 	"strconv"
 	"strings"
@@ -179,6 +180,16 @@ func (a *App) walletMutation(w http.ResponseWriter, r *http.Request, kind string
 		return
 	}
 	wid, balance, err := a.walletID(tenantID, tuID)
+	if err == sql.ErrNoRows && kind == "recharge" {
+		// 充值时按当前租户自动创建钱包（建用户时不建钱包）。
+		res, ierr := a.DB.Exec(`INSERT OR IGNORE INTO wallets(tenant_id,tenant_user_id,balance_cents,updated_at) VALUES(?,?,0,?)`, tenantID, tuID, now())
+		if ierr != nil {
+			writeErr(w, ierr)
+			return
+		}
+		_ = res
+		wid, balance, err = a.walletID(tenantID, tuID)
+	}
 	if err != nil {
 		writeErr(w, fail(404, "钱包不存在"))
 		return

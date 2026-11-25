@@ -127,6 +127,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { usersApi } from '@/api/users'
 import { tenantsApi } from '@/api/tenants'
+import { ApiError } from '@/api/request'
 import type { CreateUserPayload } from '@/api/users'
 import type { Role, User } from '@/api/types'
 import { formatCents } from '@/utils/format'
@@ -206,6 +207,21 @@ function openCreate() {
   createVisible.value = true
 }
 
+function buildCreatePayload(confirmPhone?: string): CreateUserPayload {
+  const payload: CreateUserPayload = {
+    name: createForm.name,
+    phone: createForm.phone,
+    email: createForm.email,
+    password: createForm.password,
+  }
+  if (auth.isSuper) {
+    payload.role = createForm.role
+    payload.tenantId = Number(createForm.tenantId)
+  }
+  if (confirmPhone) payload.confirmPhone = confirmPhone
+  return payload
+}
+
 async function create() {
   if (!createFormRef.value) return
   try {
@@ -215,22 +231,36 @@ async function create() {
   }
   saving.value = true
   try {
-    const payload: CreateUserPayload = {
-      name: createForm.name,
-      phone: createForm.phone,
-      email: createForm.email,
-      password: createForm.password,
-    }
-    if (auth.isSuper) {
-      payload.role = createForm.role
-      payload.tenantId = Number(createForm.tenantId)
-    }
-    await usersApi.create(payload)
+    await usersApi.create(buildCreatePayload())
     ElMessage.success('创建成功')
     createVisible.value = false
     await load()
   } catch (error) {
-    ElMessage.error(errorText(error))
+    // 该手机号已在其他租户存在：要求完整输入一次手机号确认。
+    if (error instanceof ApiError && error.code === 409 && error.message.includes('其他租户')) {
+      try {
+        const answer = await ElMessageBox.prompt(
+          `该手机号 ${createForm.phone} 已在其他租户存在。请完整输入该手机号以确认创建到本租户：`,
+          '跨租户确认',
+          {
+            inputPlaceholder: '请输入完整手机号',
+            confirmButtonText: '确认创建',
+            cancelButtonText: '取消',
+            inputValidator: (v: string) => v.trim() === createForm.phone.trim() || `请输入完整手机号 ${createForm.phone}`,
+          },
+        )
+        await usersApi.create(buildCreatePayload(answer.value.trim()))
+        ElMessage.success('创建成功')
+        createVisible.value = false
+        await load()
+      } catch (confirmError) {
+        if (confirmError !== 'cancel' && confirmError !== 'close') {
+          ElMessage.error(errorText(confirmError))
+        }
+      }
+    } else {
+      ElMessage.error(errorText(error))
+    }
   } finally {
     saving.value = false
   }

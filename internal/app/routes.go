@@ -35,6 +35,11 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("PUT /api/piles/{id}", a.requireAuth(tenantManage(a.updatePile)))
 	mux.HandleFunc("POST /api/piles/{id}/regenerate-secret", a.requireAuth(tenantManage(a.regenerateSecret)))
 	mux.HandleFunc("GET /api/guns", a.requireAuth(a.listGuns))
+	mux.HandleFunc("GET /api/gun/by-token", a.requireAuth(a.gunByToken))
+	mux.HandleFunc("GET /api/guns/{id}/qrcode", a.requireAuth(tenantManage(a.gunQrcode)))
+
+	mux.HandleFunc("GET /api/platform/config", a.requireAuth(requireRoles("super")(a.getPlatformConfig)))
+	mux.HandleFunc("PUT /api/platform/config", a.requireAuth(requireRoles("super")(a.putPlatformConfig)))
 
 	mux.HandleFunc("GET /api/wallets", a.requireAuth(tenantManage(a.listWallets)))
 	mux.HandleFunc("GET /api/ledgers", a.requireAuth(tenantManage(a.listLedgers)))

@@ -24,6 +24,12 @@ export const appRoutes: RouteRecordRaw[] = [
     meta: { title: '租户管理', icon: 'OfficeBuilding', roles: ['super'] },
   },
   {
+    path: '/platform',
+    name: 'PlatformConfig',
+    component: () => import('@/views/PlatformConfig.vue'),
+    meta: { title: '平台配置', icon: 'Setting', roles: ['super'] },
+  },
+  {
     path: '/users',
     name: 'Users',
     component: () => import('@/views/Users.vue'),

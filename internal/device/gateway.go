@@ -124,14 +124,15 @@ func (g *Gateway) handleFrame(conn net.Conn, f Frame) {
 }
 
 func (g *Gateway) handleTelemetry(f Frame) {
-	if len(f.Data) < 5 {
+	// 数据域：枪编号(18 字节 ASCII) + 累计电量 Wh(uint32 大端)
+	if len(f.Data) < 18+4 {
 		return
 	}
-	gunNo := int(f.Data[0])
-	energyWh := binary.BigEndian.Uint32(f.Data[1:5])
+	gunCode := string(f.Data[:18])
+	energyWh := binary.BigEndian.Uint32(f.Data[18:22])
 	var gunID int64
 	if err := g.DB.QueryRow(`SELECT g.id FROM guns g JOIN piles p ON p.id=g.pile_id
-		WHERE p.device_no=? AND g.gun_no=?`, f.DeviceNo, gunNo).Scan(&gunID); err != nil {
+		WHERE p.device_no=? AND g.gun_code=?`, f.DeviceNo, gunCode).Scan(&gunID); err != nil {
 		return
 	}
 	_, _ = g.DB.Exec(`UPDATE orders SET energy_wh=?,last_report_at=? WHERE gun_id=? AND status='charging'`,
@@ -153,11 +154,11 @@ func commandByte(command string) byte {
 	}
 }
 
-func (g *Gateway) SendCommand(deviceNo string, gunNo int, command, payload string) bool {
+func (g *Gateway) SendCommand(deviceNo string, gunCode string, command, payload string) bool {
 	if deviceNo == "" {
 		return false
 	}
-	data := append([]byte{byte(gunNo)}, []byte(payload)...)
+	data := append([]byte(gunCode), []byte(payload)...)
 	g.mu.Lock()
 	conn := g.conns[deviceNo]
 	g.mu.Unlock()
@@ -170,18 +171,19 @@ func (g *Gateway) SendCommand(deviceNo string, gunNo int, command, payload strin
 		delete(g.conns, deviceNo)
 		g.mu.Unlock()
 	}
-	_, _ = g.DB.Exec(`INSERT INTO device_commands(device_no,gun_no,command,payload,status,created_at)
-		VALUES(?,?,?,?,?,?)`, deviceNo, gunNo, strings.ToUpper(command), payload, "pending", time.Now().Format(time.RFC3339))
+	_, _ = g.DB.Exec(`INSERT INTO device_commands(device_no,gun_code,command,payload,status,created_at)
+		VALUES(?,?,?,?,?,?)`, deviceNo, gunCode, strings.ToUpper(command), payload, "pending", time.Now().Format(time.RFC3339))
 	return false
 }
 
 func (g *Gateway) flushPending(deviceNo string) {
-	rows, err := g.DB.Query(`SELECT id,gun_no,command,payload FROM device_commands WHERE device_no=? AND status='pending' ORDER BY id`, deviceNo)
+	rows, err := g.DB.Query(`SELECT id,gun_code,command,payload FROM device_commands WHERE device_no=? AND status='pending' ORDER BY id`, deviceNo)
 	if err != nil {
 		return
 	}
 	type cmd struct {
-		id, gun int64
+		id    int64
+		gun   string
 		name, payload string
 	}
 	var cmds []cmd
@@ -199,7 +201,7 @@ func (g *Gateway) flushPending(deviceNo string) {
 		return
 	}
 	for _, c := range cmds {
-		data := append([]byte{byte(c.gun)}, []byte(c.payload)...)
+		data := append([]byte(c.gun), []byte(c.payload)...)
 		if _, err = conn.Write(buildFrame(commandByte(c.name), deviceNo, data)); err != nil {
 			return
 		}

@@ -5,6 +5,8 @@ export interface StationInput {
   tenantId?: number
   name: string
   address: string
+  areaCode?: string
+  areaName?: string
   defaultStartTime: string
   startThresholdCents: number
   stopThresholdCents: number

@@ -143,13 +143,14 @@ func (a *App) logout(w http.ResponseWriter, r *http.Request) {
 }
 
 type userReq struct {
-	Phone    string `json:"phone"`
-	Email    string `json:"email"`
-	Password string `json:"password"`
-	Name     string `json:"name"`
-	Role     string `json:"role"`
-	TenantID int64  `json:"tenantId"`
-	Status   string `json:"status"`
+	Phone        string `json:"phone"`
+	Email        string `json:"email"`
+	Password     string `json:"password"`
+	Name         string `json:"name"`
+	Role         string `json:"role"`
+	TenantID     int64  `json:"tenantId"`
+	Status       string `json:"status"`
+	ConfirmPhone string `json:"confirmPhone"`
 }
 
 func (a *App) createUser(w http.ResponseWriter, r *http.Request) {
@@ -203,6 +204,16 @@ func (a *App) createUser(w http.ResponseWriter, r *http.Request) {
 		_, _ = a.DB.Exec(`UPDATE users SET email=? WHERE id=?`, req.Email, userID)
 	}
 
+	// 跨租户复用同一手机号：需完整输入一次手机号确认，防止误把他人加到本租户。
+	if role == "user" {
+		var otherTenants int
+		_ = a.DB.QueryRow(`SELECT COUNT(*) FROM tenant_users WHERE user_id=? AND tenant_id<>?`, userID, tenantID).Scan(&otherTenants)
+		if otherTenants > 0 && strings.TrimSpace(req.ConfirmPhone) != req.Phone {
+			writeErr(w, fail(409, "该手机号已在其他租户存在，请再次完整输入手机号 "+req.Phone+" 以确认创建"))
+			return
+		}
+	}
+
 	if _, err = a.DB.Exec(`INSERT OR IGNORE INTO tenant_users(tenant_id,user_id,role,status,created_at) VALUES(?,?,?,?,?)`,
 		tenantID, userID, role, "active", now()); err != nil {
 		writeErr(w, err)
@@ -213,13 +224,7 @@ func (a *App) createUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if role == "user" {
-		if _, err = a.DB.Exec(`INSERT OR IGNORE INTO wallets(tenant_id,tenant_user_id,balance_cents,updated_at) VALUES(?,?,0,?)`,
-			tenantID, tuID, now()); err != nil {
-			writeErr(w, err)
-			return
-		}
-	}
+	// 钱包不在建用户时创建，改为租户首次充值时按当前租户自动创建。
 	writeJSON(w, http.StatusOK, map[string]any{"id": userID, "tenantUserId": tuID, "phone": req.Phone, "email": req.Email, "name": req.Name, "role": role})
 }
 

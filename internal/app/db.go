@@ -69,6 +69,8 @@ CREATE TABLE IF NOT EXISTS stations (
   tenant_id INTEGER NOT NULL,
   name TEXT NOT NULL,
   address TEXT NOT NULL DEFAULT '',
+  area_code TEXT NOT NULL DEFAULT '',
+  area_name TEXT NOT NULL DEFAULT '',
   default_start_time TEXT NOT NULL DEFAULT '22:00',
   start_threshold_cents INTEGER NOT NULL DEFAULT 5000,
   stop_threshold_cents INTEGER NOT NULL DEFAULT 2000,
@@ -95,9 +97,13 @@ CREATE TABLE IF NOT EXISTS guns (
   tenant_id INTEGER NOT NULL,
   pile_id INTEGER NOT NULL,
   gun_no INTEGER NOT NULL,
+  gun_code TEXT NOT NULL DEFAULT '',
+  qr_token TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'idle',
   created_at TEXT NOT NULL,
-  UNIQUE(pile_id, gun_no)
+  UNIQUE(pile_id, gun_no),
+  UNIQUE(gun_code),
+  UNIQUE(qr_token)
 );
 CREATE INDEX IF NOT EXISTS idx_guns_pile ON guns(pile_id);
 CREATE TABLE IF NOT EXISTS reservations (
@@ -172,6 +178,7 @@ CREATE TABLE IF NOT EXISTS device_commands (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   device_no TEXT NOT NULL,
   gun_no INTEGER NOT NULL DEFAULT 0,
+  gun_code TEXT NOT NULL DEFAULT '',
   command TEXT NOT NULL,
   payload TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'pending',
@@ -179,6 +186,11 @@ CREATE TABLE IF NOT EXISTS device_commands (
   acked_at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_devcmd_device ON device_commands(device_no, status);
+CREATE TABLE IF NOT EXISTS platform_configs (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL
+);
 `
 
 func OpenDB(cfg config.Config) (*sql.DB, error) {
@@ -198,11 +210,62 @@ func OpenDB(cfg config.Config) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	if err = migrateColumns(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate columns: %w", err)
+	}
 	if err = seedSuperAdmin(db); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return db, nil
+}
+
+// migrateColumns 为旧库补齐新增列，SQLite 的 CREATE TABLE IF NOT EXISTS 不会改已存在的表。
+func migrateColumns(db *sql.DB) error {
+	adds := []struct{ table, col, def string }{
+		{"stations", "area_code", "TEXT NOT NULL DEFAULT ''"},
+		{"stations", "area_name", "TEXT NOT NULL DEFAULT ''"},
+		{"guns", "gun_code", "TEXT NOT NULL DEFAULT ''"},
+		{"guns", "qr_token", "TEXT NOT NULL DEFAULT ''"},
+		{"device_commands", "gun_code", "TEXT NOT NULL DEFAULT ''"},
+	}
+	for _, a := range adds {
+		exists, err := columnExists(db, a.table, a.col)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if _, err = db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", a.table, a.col, a.def)); err != nil {
+				return err
+			}
+		}
+	}
+	// gun_code / qr_token 的唯一索引（旧库可能没有）
+	_, _ = db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_guns_code ON guns(gun_code)`)
+	_, _ = db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_guns_token ON guns(qr_token)`)
+	return nil
+}
+
+func columnExists(db *sql.DB, table, col string) (bool, error) {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt any
+		if err = rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == col {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func seedSuperAdmin(db *sql.DB) error {

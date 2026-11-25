@@ -92,4 +92,34 @@ export const http = {
   delete<T>(path: string): Promise<T> {
     return request<T>(path, { method: 'DELETE' })
   },
+  /** 下载二进制文件（如二维码 PNG），返回 Blob。 */
+  async download(path: string, filename: string): Promise<void> {
+    const url = `${getBaseUrl()}${path}`
+    const token = localStorage.getItem(TOKEN_KEY)
+    const headers = new Headers()
+    if (token) headers.set('Authorization', `Bearer ${token}`)
+    const response = await fetch(url, { headers })
+    if (response.status === 401) {
+      localStorage.removeItem(TOKEN_KEY)
+      window.location.href = '/login'
+      throw new ApiError(401, '登录已过期，请重新登录')
+    }
+    if (!response.ok) {
+      let message = '下载失败'
+      try {
+        const body = await response.json() as ApiResponse<unknown>
+        message = body.message || message
+      } catch { /* ignore */ }
+      throw new ApiError(response.status, message)
+    }
+    const blob = await response.blob()
+    const objectUrl = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = objectUrl
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(objectUrl)
+  },
 }

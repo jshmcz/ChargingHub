@@ -23,7 +23,7 @@ import (
 )
 
 type CommandSender interface {
-	SendCommand(deviceNo string, gunNo int, command string, payload string) bool
+	SendCommand(deviceNo string, gunCode string, command string, payload string) bool
 }
 
 type App struct {
