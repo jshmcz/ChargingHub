@@ -1,6 +1,6 @@
 services:
   charginghub:
-    image: ghcr.io/jshmcz/charginghub:v1.1
+    image: ghcr.io/jshmcz/charginghub:v1.2
     container_name: charginghub
     restart: unless-stopped
     ports:

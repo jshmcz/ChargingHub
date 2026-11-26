@@ -16,7 +16,7 @@ import {
 } from 'vant'
 import { adminApi } from '@/api/admin'
 import type { Ledger, UserInfo, Wallet } from '@/api/types'
-import { walletApi } from '@/api/wallets'
+import { walletApi, type WalletMutationPayload } from '@/api/wallets'
 import { useAuthStore } from '@/stores/auth'
 import { formatCents, formatTime, ledgerText, signedYuan } from '@/utils/format'
 
@@ -41,11 +41,7 @@ const selectedUser = computed(
   () => users.value.find((item) => item.id === selectedUserId.value) || null,
 )
 const selectedWallet = computed<Wallet | null>(() => {
-  return (
-    wallets.value.find((item) => item.userId === selectedUserId.value) ||
-    wallets.value[0] ||
-    null
-  )
+  return wallets.value.find((item) => item.userId === selectedUserId.value) || null
 })
 const amountYuan = computed(() => formatCents(Number(form.amountCents || 0)))
 
@@ -92,12 +88,15 @@ async function submit(kind: 'recharge' | 'refund'): Promise<void> {
 
   submitting.value = true
   try {
-    const payload = {
+    const payload: WalletMutationPayload = {
       userId: selectedUserId.value,
       amountCents: amount,
       method: form.method.trim() || 'cash',
       voucherNo: form.voucherNo.trim(),
       remark: form.remark.trim(),
+    }
+    if (auth.role === 'super' && selectedUser.value?.tenantId) {
+      payload.tenantId = Number(selectedUser.value.tenantId)
     }
     if (kind === 'recharge') {
       await walletApi.recharge(payload)
@@ -150,7 +149,13 @@ onMounted(load)
         <Field v-model="form.voucherNo" label="凭证号" placeholder="选填" />
         <Field v-model="form.remark" label="备注" placeholder="选填" />
         <div class="form-actions">
-          <Button block type="primary" :loading="submitting" @click="submit('recharge')">
+          <Button
+            v-if="auth.canRefund"
+            block
+            type="primary"
+            :loading="submitting"
+            @click="submit('recharge')"
+          >
             充值
           </Button>
           <Button

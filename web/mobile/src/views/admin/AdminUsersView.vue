@@ -15,9 +15,10 @@ import {
   showToast,
 } from 'vant'
 import { adminApi, type CreateUserPayload } from '@/api/admin'
+import { walletApi, type WalletMutationPayload } from '@/api/wallets'
 import type { Role, UserInfo } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
-import { formatCents, roleText } from '@/utils/format'
+import { formatCents, roleTagType, roleText } from '@/utils/format'
 
 const auth = useAuthStore()
 
@@ -40,6 +41,16 @@ const createForm = reactive({
 const editOpen = ref(false)
 const editing = ref(false)
 const editForm = reactive({ id: '', status: '', email: '', name: '' })
+
+const rechargeOpen = ref(false)
+const recharging = ref(false)
+const rechargingUser = ref<UserInfo | null>(null)
+const rechargeForm = reactive({
+  amountCents: '',
+  method: 'cash',
+  voucherNo: '',
+  remark: '',
+})
 
 async function load(): Promise<void> {
   loading.value = true
@@ -125,6 +136,43 @@ async function saveUser(): Promise<void> {
   }
 }
 
+function openRecharge(user: UserInfo): void {
+  rechargingUser.value = user
+  Object.assign(rechargeForm, { amountCents: '', method: 'cash', voucherNo: '', remark: '' })
+  rechargeOpen.value = true
+}
+
+async function submitRecharge(): Promise<void> {
+  const user = rechargingUser.value
+  if (!user) return
+  const amount = Number(rechargeForm.amountCents)
+  if (!Number.isInteger(amount) || amount <= 0) {
+    showToast('金额需为正整数（单位：分）')
+    return
+  }
+  recharging.value = true
+  try {
+    const payload: WalletMutationPayload = {
+      userId: user.id,
+      amountCents: amount,
+      method: rechargeForm.method.trim() || 'cash',
+      voucherNo: rechargeForm.voucherNo.trim(),
+      remark: rechargeForm.remark.trim(),
+    }
+    if (auth.role === 'super' && user.tenantId) {
+      payload.tenantId = Number(user.tenantId)
+    }
+    await walletApi.recharge(payload)
+    showToast({ type: 'success', message: '充值成功' })
+    rechargeOpen.value = false
+    await load()
+  } catch {
+    // 统一由 request.ts 提示
+  } finally {
+    recharging.value = false
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -154,7 +202,7 @@ onMounted(load)
         >
           <template #value>
             <div class="col user-value">
-              <Tag v-if="user.role" :type="user.role === 'user' ? 'default' : 'primary'" size="medium">
+              <Tag :type="roleTagType(user.role)" size="medium">
                 {{ roleText(user.role) }}
               </Tag>
               <span class="money">¥{{ formatCents(user.balanceCents) }}</span>
@@ -167,7 +215,18 @@ onMounted(load)
             </div>
           </template>
           <template #right-icon>
-            <Button size="mini" plain type="primary" @click="openEdit(user)">编辑</Button>
+            <div class="row-actions">
+              <Button
+                v-if="auth.canRefund && user.role === 'user'"
+                size="mini"
+                plain
+                type="success"
+                @click="openRecharge(user)"
+              >
+                充值
+              </Button>
+              <Button size="mini" plain type="primary" @click="openEdit(user)">编辑</Button>
+            </div>
           </template>
         </Cell>
       </CellGroup>
@@ -203,6 +262,21 @@ onMounted(load)
         <Button block type="primary" :loading="editing" @click="saveUser">保存</Button>
       </div>
     </Popup>
+
+    <Popup v-model:show="rechargeOpen" position="bottom" round>
+      <div class="popup-title">线下充值</div>
+      <div class="popup-form">
+        <Field readonly label="用户" :model-value="rechargingUser ? `${rechargingUser.name} · ${rechargingUser.phone}` : ''" />
+        <Field v-model="rechargeForm.amountCents" label="金额(分)" type="digit" placeholder="请输入整数分" />
+        <Field v-model="rechargeForm.method" label="方式" placeholder="cash / wechat / alipay / bank" />
+        <Field v-model="rechargeForm.voucherNo" label="凭证号" placeholder="选填" />
+        <Field v-model="rechargeForm.remark" label="备注" placeholder="选填" />
+      </div>
+      <div class="form-actions">
+        <Button block @click="rechargeOpen = false">取消</Button>
+        <Button block type="primary" :loading="recharging" @click="submitRecharge">确认充值</Button>
+      </div>
+    </Popup>
   </div>
 </template>
 
@@ -226,6 +300,12 @@ onMounted(load)
 
 .user-label {
   align-items: flex-start;
+}
+
+.row-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
 }
 
 .popup-title {

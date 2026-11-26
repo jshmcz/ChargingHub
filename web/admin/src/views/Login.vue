@@ -21,9 +21,6 @@
             autocomplete="current-password"
           />
         </el-form-item>
-        <el-form-item label="租户ID" prop="tenantId">
-          <el-input v-model="form.tenantId" placeholder="租户用户可选填" />
-        </el-form-item>
         <el-form-item>
           <el-button type="primary" :loading="loading" style="width: 100%" @click="handleLogin">
             登录
@@ -49,7 +46,7 @@ const route = useRoute()
 const formRef = ref<FormInstance>()
 const loading = ref(false)
 
-const form = reactive({ username: '', password: '', tenantId: '' })
+const form = reactive({ username: '', password: '' })
 
 const rules: FormRules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
@@ -68,7 +65,6 @@ async function handleLogin() {
     await auth.login({
       username: form.username,
       password: form.password,
-      tenantId: form.tenantId || undefined,
     })
     ElMessage.success('登录成功')
     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/dashboard'

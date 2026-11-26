@@ -13,29 +13,36 @@
 
     <div class="table-wrap">
       <el-table :data="pagedList" border v-loading="loading" min-width="760">
-        <el-table-column prop="id" label="ID" width="90" />
-        <el-table-column prop="userId" label="用户ID" width="110" />
+        <el-table-column v-if="auth.isEndUser" prop="tenantName" label="所属租户" min-width="160" />
+        <el-table-column v-else prop="id" label="ID" width="90" />
+        <el-table-column v-if="!auth.isEndUser" prop="userId" label="用户ID" width="110" />
         <el-table-column label="余额" min-width="140">
           <template #default="{ row }">{{ formatCents(row.balanceCents) }}</template>
         </el-table-column>
-        <el-table-column label="冻结" width="100">
+        <el-table-column label="状态" width="110">
           <template #default="{ row }">
-            <el-tag :type="row.frozen ? 'danger' : 'success'">{{ row.frozen ? '是' : '否' }}</el-tag>
+            <el-tag :type="row.status === 'frozen' ? 'danger' : 'success'">
+              {{ row.status === 'frozen' ? '冻结' : '正常' }}
+            </el-tag>
           </template>
         </el-table-column>
-        <el-table-column v-if="!auth.isEndUser" label="操作" width="300" fixed="right">
+        <el-table-column v-if="!auth.isEndUser" label="操作" width="240" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" @click="openOp('recharge', row.userId)">线下充值</el-button>
+            <el-button
+              v-if="auth.canRecharge"
+              link
+              type="primary"
+              @click="openOp('recharge', row.userId, row.tenantId)"
+            >
+              线下充值
+            </el-button>
             <el-button
               v-if="auth.canRefund"
               link
               type="warning"
-              @click="openOp('refund', row.userId)"
+              @click="openOp('refund', row.userId, row.tenantId)"
             >
               线下退款
-            </el-button>
-            <el-button link @click="toggleFreeze(row)">
-              {{ row.frozen ? '解冻' : '冻结' }}
             </el-button>
           </template>
         </el-table-column>
@@ -62,6 +69,11 @@
         style="margin-bottom: 16px"
       />
       <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
+        <el-form-item v-if="auth.isSuper" label="租户">
+          <el-select v-model="form.tenantId" style="width: 100%" filterable placeholder="请选择租户">
+            <el-option v-for="t in tenants" :key="t.id" :label="t.name" :value="t.id" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="用户ID" prop="userId">
           <el-input-number v-model="form.userId" :min="1" :controls="false" style="width: 100%" />
         </el-form-item>
@@ -98,6 +110,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { walletsApi } from '@/api/wallets'
+import { tenantsApi } from '@/api/tenants'
 import type { WalletOpPayload } from '@/api/wallets'
 import type { Wallet } from '@/api/types'
 import { formatCents, yuanToCents } from '@/utils/format'
@@ -106,6 +119,7 @@ import { useAuthStore } from '@/stores/auth'
 const auth = useAuthStore()
 const loading = ref(false)
 const list = ref<Wallet[]>([])
+const tenants = ref<{ id: number; name: string }[]>([])
 const userIdFilter = ref(0)
 const page = ref(1)
 const pageSize = 10
@@ -121,8 +135,7 @@ async function load() {
   loading.value = true
   try {
     if (auth.isEndUser) {
-      const wallet = await walletsApi.my()
-      list.value = wallet ? [wallet] : []
+      list.value = await walletsApi.myList()
     } else {
       list.value = await walletsApi.list(userIdFilter.value || undefined)
     }
@@ -134,23 +147,40 @@ async function load() {
   }
 }
 
-onMounted(load)
+onMounted(async () => {
+  if (auth.isSuper) {
+    try {
+      tenants.value = await tenantsApi.list()
+    } catch {
+      // 租户列表加载失败不阻塞钱包列表。
+    }
+  }
+  await load()
+})
 
 const dialogVisible = ref(false)
 const opType = ref<'recharge' | 'refund'>('recharge')
 const saving = ref(false)
 const formRef = ref<FormInstance>()
-const form = reactive({ userId: 0, amountYuan: 0, method: 'cash', voucherNo: '', remark: '' })
+const form = reactive({
+  userId: 0,
+  tenantId: 0,
+  amountYuan: 0,
+  method: 'cash',
+  voucherNo: '',
+  remark: '',
+})
 
 const rules: FormRules = {
   userId: [{ required: true, message: '请输入用户ID', trigger: 'blur' }],
   amountYuan: [{ required: true, message: '请输入金额', trigger: 'blur' }],
 }
 
-function openOp(type: 'recharge' | 'refund', userId: number) {
+function openOp(type: 'recharge' | 'refund', userId: number, tenantId?: number) {
   opType.value = type
   Object.assign(form, {
     userId: userId || userIdFilter.value || 0,
+    tenantId: Number(tenantId || tenants.value[0]?.id || 0),
     amountYuan: 0,
     method: 'cash',
     voucherNo: '',
@@ -173,6 +203,7 @@ async function submit() {
     voucherNo: form.voucherNo,
     remark: form.remark,
   }
+  if (auth.isSuper && form.tenantId > 0) payload.tenantId = form.tenantId
   saving.value = true
   try {
     if (opType.value === 'recharge') await walletsApi.recharge(payload)
@@ -184,16 +215,6 @@ async function submit() {
     ElMessage.error(errorText(error))
   } finally {
     saving.value = false
-  }
-}
-
-async function toggleFreeze(row: Wallet) {
-  try {
-    await walletsApi.freeze(row.userId, !row.frozen)
-    row.frozen = !row.frozen
-    ElMessage.success(row.frozen ? '已冻结' : '已解冻')
-  } catch (error) {
-    ElMessage.error(errorText(error))
   }
 }
 </script>

@@ -46,6 +46,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("POST /api/wallet/recharge", a.requireAuth(tenantAdmin(a.recharge)))
 	mux.HandleFunc("POST /api/wallet/refund", a.requireAuth(tenantAdmin(a.refund)))
 	mux.HandleFunc("GET /api/my/wallet", a.requireAuth(a.myWallet))
+	mux.HandleFunc("GET /api/my/wallets", a.requireAuth(a.myWallets))
 	mux.HandleFunc("GET /api/my/ledgers", a.requireAuth(a.myLedgers))
 	mux.HandleFunc("GET /api/my/orders", a.requireAuth(a.listOrders))
 	mux.HandleFunc("GET /api/my/reservations", a.requireAuth(a.listReservations))

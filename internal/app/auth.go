@@ -16,6 +16,20 @@ type loginReq struct {
 	TenantID int64  `json:"tenantId"`
 }
 
+// tenantRoleRank 用于未指定 tenantId 时自动选择主租户：管理员优先，其次操作员，最后充电用户。
+func tenantRoleRank(role string) int {
+	switch role {
+	case "tenant_admin":
+		return 0
+	case "operator":
+		return 1
+	case "user":
+		return 2
+	default:
+		return 3
+	}
+}
+
 func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	var req loginReq
 	if err := decodeJSON(r, &req); err != nil {
@@ -84,11 +98,16 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 				writeErr(w, fail(403, "账号不属于该租户"))
 				return
 			}
-		} else if len(links) == 1 {
-			chosen = &links[0]
 		} else {
-			writeErr(w, fail(400, "该账号属于多个租户，请指定 tenantId"))
-			return
+			// 登录页不展示租户 ID：多租户账号自动进入优先级最高的租户。
+			chosen = &links[0]
+			for i := 1; i < len(links); i++ {
+				candidate, current := &links[i], chosen
+				cr, cu := tenantRoleRank(candidate.role), tenantRoleRank(current.role)
+				if cr < cu || (cr == cu && candidate.tid < current.tid) {
+					chosen = candidate
+				}
+			}
 		}
 		tenantID, tenantUserID, effectiveRole = chosen.tid, chosen.id, chosen.role
 	}

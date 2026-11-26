@@ -5,7 +5,7 @@ import { walletApi } from '@/api/wallets'
 import type { Ledger, Wallet } from '@/api/types'
 import { formatCents, formatTime, ledgerText, signedYuan } from '@/utils/format'
 
-const wallet = ref<Wallet | null>(null)
+const wallets = ref<Wallet[]>([])
 const ledgers = ref<Ledger[]>([])
 const loading = ref(true)
 const refreshing = ref(false)
@@ -14,10 +14,10 @@ async function load(): Promise<void> {
   loading.value = true
   try {
     const [walletData, ledgerData] = await Promise.all([
-      walletApi.myWallet(),
+      walletApi.myWallets(),
       walletApi.myLedgers(),
     ])
-    wallet.value = walletData
+    wallets.value = walletData || []
     ledgers.value = ledgerData || []
   } finally {
     loading.value = false
@@ -36,11 +36,16 @@ onMounted(load)
   <div class="page">
     <NavBar title="我的钱包" />
 
-    <div class="balance-card">
-      <div class="muted">钱包余额（元）</div>
-      <div class="balance-amount">¥{{ formatCents(wallet?.balanceCents) }}</div>
+    <Empty
+      v-if="!loading && wallets.length === 0"
+      image="search"
+      description="暂无钱包，请联系租户管理员充值"
+    />
+    <div v-for="item in wallets" :key="item.id" class="balance-card">
+      <div class="muted">{{ item.tenantName || '默认租户' }} · 钱包余额（元）</div>
+      <div class="balance-amount">¥{{ formatCents(item.balanceCents) }}</div>
       <div class="balance-foot">
-        <span v-if="wallet?.frozen" class="frozen">账户已冻结，请联系管理员</span>
+        <span v-if="item.status === 'frozen'" class="frozen">账户已冻结，请联系管理员</span>
         <span v-else>充电启动与预约将校验该余额</span>
       </div>
     </div>

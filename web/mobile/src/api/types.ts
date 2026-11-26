@@ -82,7 +82,9 @@ export interface Wallet {
   id?: string
   userId?: string
   tenantId?: string
+  tenantName?: string
   balanceCents: number
+  status?: string
   frozen?: boolean
 }
 

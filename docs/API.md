@@ -23,6 +23,7 @@
 ## 认证
 
 - `POST /api/login` body `{username, password, deviceId, tenantId?}` → `{token, role, tenantId, user:{id,phone,email,name}}`
+  - 页面不需要填写 `tenantId`；同一账号属于多个租户时按“租户管理员 → 操作员 → 充电用户 → 租户ID升序”自动选择主租户。API 仍可显式传 `tenantId` 指定租户。
   - 同 deviceId 重复登录复用原会话；不同 deviceId 登录踢掉该用户全部旧会话。
 - `GET /api/me` → 同上（无 token 字段）
 - `POST /api/logout`
@@ -60,12 +61,11 @@
 
 钱包（现金流水，`operator` 无退款/SMTP 权限）：
 
-- `GET /api/wallets?userId=` → 钱包列表（含 balanceCents）
-- `GET /api/ledgers?userId=` → 流水列表
-- `POST /api/wallet/recharge` body `{userId,amountCents,method,voucherNo,remark}`
-- `POST /api/wallet/refund` body `{userId,amountCents,method,voucherNo,remark}`
+- `GET /api/wallets?userId=` → 钱包列表（含 balanceCents）。超管看全部租户，租户员工看本租户；`user` 角色即使放宽路由也只看自己。
+- `GET /api/ledgers?userId=` → 流水列表，范围同上。
+- `POST /api/wallet/recharge` body `{userId,amountCents,method,voucherNo,remark,tenantId?}`（仅 `super`/`tenant_admin`，目标用户必须是对应租户的 `user` 角色）
+- `POST /api/wallet/refund` body `{userId,amountCents,method,voucherNo,remark,tenantId?}`（同上）
   - 校验：余额足够；该用户在该租户下无 `charging`/`pending_settle` 订单；无 `pending`/`active` 预约单。已结算历史订单不拦截。
-- `POST /api/wallet/{userId}/freeze` body `{frozen:true|false}`（可选）
 
 预约与订单：
 
@@ -79,13 +79,15 @@
 
 通知配置：
 
-- `GET|PUT /api/smtp` body `{host,port,username,password,from,encryption:"none|ssl|starttls",enabled}`
+- `GET|PUT /api/smtp?tenantId=` body `{host,port,username,password,from,encryption:"none|ssl|starttls",enabled}`
+  - 租户管理员只能读写本租户配置；平台超管必须通过 `tenantId` 指定目标租户，不能写 `tenant_id=0`。
+  - 配置只用于该租户的订单/预约/充电通知；发送前校验收件用户也属于同一租户。
 - `GET /api/notifications?userId=` → 发送记录
 
 ## 用户端
 
 - `GET /api/stations` → 本租户场站（含枪状态）
-- `GET /api/my/wallet`，`GET /api/my/ledgers`
+- `GET /api/my/wallet`（当前租户），`GET /api/my/wallets`（本人在所有租户的钱包余额，含 `tenantName`），`GET /api/my/ledgers`（当前租户）
 - `GET /api/my/orders`，`GET /api/my/reservations`（与 `/api/orders`、`/api/reservations` 等价，自动按当前用户过滤）
 - `GET /api/gun/by-token?token=` → 扫码后按枪令牌定位枪，返回枪编号/场站/状态/当前钱包余额（自动锁定本租户）
 - `POST /api/reservations` body `{stationId,gunId}`（同管理员接口，自动绑定当前用户）→ `{id,startAt,status}`

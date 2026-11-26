@@ -7,6 +7,8 @@ export interface WalletOpPayload {
   method: string
   voucherNo: string
   remark: string
+  /** 仅平台超管需要指定目标租户 */
+  tenantId?: number
 }
 
 export const walletsApi = {
@@ -15,6 +17,7 @@ export const walletsApi = {
   refund: (body: WalletOpPayload) => http.post<Wallet>('/wallet/refund', body),
   freeze: (userId: number, frozen: boolean) => http.post<Wallet>(`/wallet/${userId}/freeze`, { frozen }),
   my: () => http.get<Wallet>('/my/wallet'),
+  myList: () => http.get<Wallet[]>('/my/wallets'),
 }
 
 export const ledgersApi = {

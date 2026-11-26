@@ -3,8 +3,8 @@ package app
 import (
 	"crypto/tls"
 	"mime"
-	"net/smtp"
 	"net/http"
+	"net/smtp"
 	"strconv"
 	"strings"
 	"time"
@@ -29,12 +29,31 @@ type smtpReq struct {
 	Enabled    bool   `json:"enabled"`
 }
 
+// smtpTenantID 返回 SMTP 配置所属租户。租户管理员锁定本租户；超管必须显式指定租户，
+// 避免把配置写到 tenant_id=0。配置按租户隔离，只对该租户的场站/桩通知生效。
+func (a *App) smtpTenantID(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	s := current(r)
+	if s.Role != "super" {
+		return s.TenantID, true
+	}
+	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenantId"), 10, 64)
+	if tenantID <= 0 {
+		writeErr(w, fail(400, "平台超管需指定要配置的租户"))
+		return 0, false
+	}
+	return tenantID, true
+}
+
 func (a *App) getSMTP(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := a.smtpTenantID(w, r)
+	if !ok {
+		return
+	}
 	var host, username, passwordEnc, from, encryption string
 	var port int
 	var enabled int
 	err := a.DB.QueryRow(`SELECT host,port,username,password_enc,from_addr,encryption,enabled FROM smtp_configs WHERE tenant_id=?`,
-		current(r).TenantID).Scan(&host, &port, &username, &passwordEnc, &from, &encryption, &enabled)
+		tenantID).Scan(&host, &port, &username, &passwordEnc, &from, &encryption, &enabled)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "port": 587, "encryption": "starttls"})
 		return
@@ -48,6 +67,10 @@ func (a *App) getSMTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) putSMTP(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := a.smtpTenantID(w, r)
+	if !ok {
+		return
+	}
 	var req smtpReq
 	if err := decodeJSON(r, &req); err != nil {
 		writeErr(w, err)
@@ -69,7 +92,7 @@ func (a *App) putSMTP(w http.ResponseWriter, r *http.Request) {
 	}
 	password := strings.TrimSpace(req.Password)
 	if password == "******" || password == "" {
-		_ = a.DB.QueryRow(`SELECT password_enc FROM smtp_configs WHERE tenant_id=?`, current(r).TenantID).Scan(&password)
+		_ = a.DB.QueryRow(`SELECT password_enc FROM smtp_configs WHERE tenant_id=?`, tenantID).Scan(&password)
 	} else {
 		password = a.encrypt(password)
 	}
@@ -77,7 +100,7 @@ func (a *App) putSMTP(w http.ResponseWriter, r *http.Request) {
 		VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(tenant_id) DO UPDATE SET host=excluded.host,port=excluded.port,
 		username=excluded.username,password_enc=excluded.password_enc,from_addr=excluded.from_addr,
 		encryption=excluded.encryption,enabled=excluded.enabled,updated_at=excluded.updated_at`,
-		current(r).TenantID, req.Host, req.Port, req.Username, password, req.From, req.Encryption, enc, now())
+		tenantID, req.Host, req.Port, req.Username, password, req.From, req.Encryption, enc, now())
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -162,8 +185,9 @@ func (a *App) sendNotify(job notifyJob) {
 		return
 	}
 	var email string
-	if err = a.DB.QueryRow(`SELECT email FROM users WHERE id=?`, job.UserID).Scan(&email); err != nil || email == "" {
-		a.markNotify(job.ID, "no_email", "用户未配置邮箱")
+	if err = a.DB.QueryRow(`SELECT u.email FROM users u JOIN tenant_users tu ON tu.user_id=u.id
+		WHERE u.id=? AND tu.tenant_id=? AND tu.status='active'`, job.UserID, job.TenantID).Scan(&email); err != nil || email == "" {
+		a.markNotify(job.ID, "no_email", "用户未配置邮箱或不属于该租户")
 		return
 	}
 	password := a.decrypt(passwordEnc)

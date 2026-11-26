@@ -8,19 +8,25 @@ import (
 )
 
 type walletTxReq struct {
-	TenantID   int64  `json:"tenantId"`
-	UserID     int64  `json:"userId"`
-	Amount     int64  `json:"amountCents"`
-	Method     string `json:"method"`
-	VoucherNo  string `json:"voucherNo"`
-	Remark     string `json:"remark"`
-	BizNo      string `json:"bizNo"`
+	TenantID  int64  `json:"tenantId"`
+	UserID    int64  `json:"userId"`
+	Amount    int64  `json:"amountCents"`
+	Method    string `json:"method"`
+	VoucherNo string `json:"voucherNo"`
+	Remark    string `json:"remark"`
+	BizNo     string `json:"bizNo"`
 }
 
 func (a *App) tenantUserID(tenantID, userID int64) (int64, error) {
 	var tuID int64
 	err := a.DB.QueryRow(`SELECT id FROM tenant_users WHERE tenant_id=? AND user_id=?`, tenantID, userID).Scan(&tuID)
 	return tuID, err
+}
+
+func (a *App) tenantUserRole(tenantUserID int64) (string, error) {
+	var role string
+	err := a.DB.QueryRow(`SELECT role FROM tenant_users WHERE id=?`, tenantUserID).Scan(&role)
+	return role, err
 }
 
 func (a *App) walletID(tenantID, tuID int64) (int64, int64, error) {
@@ -38,6 +44,10 @@ func (a *App) listWallets(w http.ResponseWriter, r *http.Request) {
 	if s.Role != "super" {
 		query += ` AND w.tenant_id=?`
 		args = append(args, s.TenantID)
+	}
+	if s.Role == "user" {
+		query += ` AND w.tenant_user_id=?`
+		args = append(args, s.TenantUserID)
 	}
 	if userID > 0 {
 		query += ` AND u.id=?`
@@ -74,6 +84,10 @@ func (a *App) listLedgers(w http.ResponseWriter, r *http.Request) {
 		query += ` AND l.tenant_id=?`
 		args = append(args, s.TenantID)
 	}
+	if s.Role == "user" {
+		query += ` AND l.tenant_user_id=?`
+		args = append(args, s.TenantUserID)
+	}
 	if userID > 0 {
 		query += ` AND u.id=?`
 		args = append(args, userID)
@@ -108,6 +122,32 @@ func (a *App) myWallet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "balanceCents": balance})
+}
+
+// myWallets 返回当前用户在所有租户下的钱包余额，仅包含本人钱包。
+func (a *App) myWallets(w http.ResponseWriter, r *http.Request) {
+	s := current(r)
+	rows, err := a.DB.Query(`SELECT w.id,w.tenant_id,w.tenant_user_id,w.balance_cents,w.status,COALESCE(t.name,'')
+		FROM wallets w JOIN tenant_users tu ON tu.id=w.tenant_user_id
+		LEFT JOIN tenants t ON t.id=w.tenant_id
+		WHERE tu.user_id=? AND tu.status='active' ORDER BY w.tenant_id`, s.UserID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	defer rows.Close()
+	out := make([]map[string]any, 0)
+	for rows.Next() {
+		var id, tenantID, tuID, balance int64
+		var status, tenantName string
+		if err = rows.Scan(&id, &tenantID, &tuID, &balance, &status, &tenantName); err != nil {
+			writeErr(w, err)
+			return
+		}
+		out = append(out, map[string]any{"id": id, "tenantId": tenantID, "tenantUserId": tuID,
+			"userId": s.UserID, "balanceCents": balance, "status": status, "tenantName": tenantName})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (a *App) myLedgers(w http.ResponseWriter, r *http.Request) {
@@ -160,6 +200,11 @@ func (a *App) walletMutation(w http.ResponseWriter, r *http.Request, kind string
 	tuID, err := a.tenantUserID(tenantID, req.UserID)
 	if err != nil {
 		writeErr(w, fail(404, "用户不属于当前租户"))
+		return
+	}
+	targetRole, err := a.tenantUserRole(tuID)
+	if err != nil || targetRole != "user" {
+		writeErr(w, fail(403, "只能对充电用户进行充值或退款"))
 		return
 	}
 	amount := sign * req.Amount

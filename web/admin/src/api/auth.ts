@@ -5,7 +5,7 @@ export interface LoginPayload {
   username: string
   password: string
   deviceId: string
-  tenantId?: number | string
+  tenantId?: number
 }
 
 export const authApi = {

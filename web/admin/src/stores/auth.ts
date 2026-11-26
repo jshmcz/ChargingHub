@@ -47,7 +47,8 @@ export const useAuthStore = defineStore('auth', {
     isEndUser: (state) => state.role === 'user',
     isStaff: (state) => ['super', 'tenant_admin', 'operator'].includes(state.role),
     canManageTenants: (state) => state.role === 'super',
-    /** operator 无退款权限；super 拥有一切权限。 */
+    /** operator 无充值/退款权限；super 拥有一切权限。 */
+    canRecharge: (state) => state.role === 'super' || state.role === 'tenant_admin',
     canRefund: (state) => state.role === 'super' || state.role === 'tenant_admin',
     /** operator 无 SMTP 配置权限。 */
     canConfigSmtp: (state) => state.role === 'super' || state.role === 'tenant_admin',
@@ -73,14 +74,11 @@ export const useAuthStore = defineStore('auth', {
         JSON.stringify({ role: this.role, tenantId: this.tenantId, user: this.user }),
       )
     },
-    async login(payload: { username: string; password: string; tenantId?: number | string }) {
+    async login(payload: { username: string; password: string }) {
       const body: LoginPayload = {
         username: payload.username,
         password: payload.password,
         deviceId: this.deviceId,
-      }
-      if (payload.tenantId !== undefined && payload.tenantId !== '') {
-        body.tenantId = payload.tenantId
       }
       const result = await authApi.login(body)
       this.setSession(result)

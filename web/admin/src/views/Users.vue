@@ -23,7 +23,11 @@
         <el-table-column prop="phone" label="手机号" min-width="140" />
         <el-table-column prop="email" label="邮箱" min-width="180" />
         <el-table-column v-if="auth.isSuper" prop="tenantName" label="所属租户" min-width="140" />
-        <el-table-column v-if="auth.isSuper" prop="role" label="角色" width="130" />
+        <el-table-column label="角色" width="130">
+          <template #default="{ row }">
+            <el-tag :type="roleTagType(row.role)">{{ roleText(row.role) }}</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="钱包余额" width="130">
           <template #default="{ row }">{{ formatCents(row.balanceCents) }}</template>
         </el-table-column>
@@ -34,8 +38,16 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="180" fixed="right">
+        <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
+            <el-button
+              v-if="auth.canRecharge && row.role === 'user'"
+              link
+              type="success"
+              @click="openRecharge(row)"
+            >
+              充值
+            </el-button>
             <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
             <el-button
               v-if="row.status !== 'disabled'"
@@ -119,6 +131,38 @@
         </div>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="rechargeVisible" title="线下充值" width="480px">
+      <el-form ref="rechargeFormRef" :model="rechargeForm" :rules="rechargeRules" label-width="90px">
+        <el-form-item label="用户">
+          <span>{{ rechargeUserName }}</span>
+        </el-form-item>
+        <el-form-item label="金额(元)" prop="amountYuan">
+          <el-input-number v-model="rechargeForm.amountYuan" :min="0.01" :precision="2" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="方式" prop="method">
+          <el-select v-model="rechargeForm.method" style="width: 100%">
+            <el-option label="现金" value="cash" />
+            <el-option label="银行转账" value="bank" />
+            <el-option label="微信" value="wechat" />
+            <el-option label="支付宝" value="alipay" />
+            <el-option label="其他" value="other" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="凭证号">
+          <el-input v-model="rechargeForm.voucherNo" placeholder="选填" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="rechargeForm.remark" type="textarea" :rows="2" placeholder="选填" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="rechargeVisible = false">取消</el-button>
+          <el-button type="primary" :loading="rechargeSaving" @click="submitRecharge">确定充值</el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -127,10 +171,12 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { usersApi } from '@/api/users'
 import { tenantsApi } from '@/api/tenants'
+import { walletsApi } from '@/api/wallets'
 import { ApiError } from '@/api/request'
 import type { CreateUserPayload } from '@/api/users'
+import type { WalletOpPayload } from '@/api/wallets'
 import type { Role, User } from '@/api/types'
-import { formatCents } from '@/utils/format'
+import { formatCents, roleTagType, roleText, yuanToCents } from '@/utils/format'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
@@ -318,6 +364,61 @@ async function disableUser(row: User) {
     await load()
   } catch (error) {
     ElMessage.error(errorText(error))
+  }
+}
+
+const rechargeVisible = ref(false)
+const rechargeSaving = ref(false)
+const rechargeFormRef = ref<FormInstance>()
+const rechargingUser = ref<User | null>(null)
+const rechargeForm = reactive({
+  amountYuan: 0,
+  method: 'cash',
+  voucherNo: '',
+  remark: '',
+})
+
+const rechargeRules: FormRules = {
+  amountYuan: [{ required: true, message: '请输入充值金额', trigger: 'blur' }],
+}
+
+const rechargeUserName = computed(() =>
+  rechargingUser.value ? `${rechargingUser.value.name}（${rechargingUser.value.phone}）` : '',
+)
+
+function openRecharge(row: User) {
+  rechargingUser.value = row
+  Object.assign(rechargeForm, { amountYuan: 0, method: 'cash', voucherNo: '', remark: '' })
+  rechargeVisible.value = true
+}
+
+async function submitRecharge() {
+  if (!rechargingUser.value || !rechargeFormRef.value) return
+  try {
+    await rechargeFormRef.value.validate()
+  } catch {
+    return
+  }
+  const payload: WalletOpPayload = {
+    userId: rechargingUser.value.id,
+    amountCents: yuanToCents(rechargeForm.amountYuan),
+    method: rechargeForm.method,
+    voucherNo: rechargeForm.voucherNo,
+    remark: rechargeForm.remark,
+  }
+  if (auth.isSuper && rechargingUser.value.tenantId) {
+    payload.tenantId = Number(rechargingUser.value.tenantId)
+  }
+  rechargeSaving.value = true
+  try {
+    await walletsApi.recharge(payload)
+    ElMessage.success('充值成功')
+    rechargeVisible.value = false
+    await load()
+  } catch (error) {
+    ElMessage.error(errorText(error))
+  } finally {
+    rechargeSaving.value = false
   }
 }
 

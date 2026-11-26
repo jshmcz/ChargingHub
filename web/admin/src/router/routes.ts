@@ -39,7 +39,7 @@ export const appRoutes: RouteRecordRaw[] = [
     path: '/stations',
     name: 'Stations',
     component: () => import('@/views/Stations.vue'),
-    meta: { title: '场站管理', icon: 'Location', roles: ['super', 'tenant_admin', 'operator', 'user'] },
+    meta: { title: '场站管理', icon: 'Location', roles: ['super', 'tenant_admin', 'operator'] },
   },
   {
     path: '/piles',

@@ -7,11 +7,17 @@ export interface WalletMutationPayload {
   method: string
   voucherNo?: string
   remark?: string
+  /** 仅平台超管需要指定目标租户 */
+  tenantId?: number
 }
 
 export const walletApi = {
   myWallet(): Promise<Wallet> {
     return get<Wallet>('/my/wallet')
+  },
+
+  myWallets(): Promise<Wallet[]> {
+    return get<Wallet[]>('/my/wallets')
   },
 
   myLedgers(): Promise<Ledger[]> {

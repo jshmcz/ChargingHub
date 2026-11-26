@@ -5,7 +5,6 @@ import type { LoginResult, MeResult } from './types'
 export interface LoginCredentials {
   username: string
   password: string
-  tenantId?: string
 }
 
 export const authApi = {

@@ -1,7 +1,7 @@
 <template>
   <div class="page-container">
     <div class="page-header">
-      <h2 class="page-title">SMTP 配置</h2>
+      <h2 class="page-title">SMTP 配置（按租户生效）</h2>
       <el-button type="primary" :loading="saving" @click="save">保存配置</el-button>
     </div>
 
@@ -14,8 +14,21 @@
       style="margin-bottom: 16px"
     />
 
+    <el-alert
+      type="info"
+      :closable="false"
+      show-icon
+      title="每个租户使用自己的 SMTP 配置，只对该租户的场站、充电桩和用户通知生效。"
+      style="margin-bottom: 16px"
+    />
+
     <el-card shadow="never">
       <el-form ref="formRef" :model="form" :rules="rules" label-width="110px" style="max-width: 720px">
+        <el-form-item v-if="auth.isSuper" label="配置租户">
+          <el-select v-model="selectedTenantId" style="width: 100%" filterable placeholder="请选择租户" @change="load">
+            <el-option v-for="t in tenants" :key="t.id" :label="t.name" :value="t.id" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="SMTP 主机" prop="host">
           <el-input v-model="form.host" placeholder="如 smtp.example.com" />
         </el-form-item>
@@ -50,12 +63,15 @@
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { smtpApi } from '@/api/smtp'
+import { tenantsApi } from '@/api/tenants'
 import type { SmtpConfig } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
 const saving = ref(false)
 const formRef = ref<FormInstance>()
+const tenants = ref<{ id: number; name: string }[]>([])
+const selectedTenantId = ref<number | null>(null)
 const form = reactive<SmtpConfig>({
   host: '',
   port: 465,
@@ -78,19 +94,38 @@ function errorText(error: unknown): string {
 }
 
 async function load() {
+  const tenantId = auth.isSuper ? selectedTenantId.value || undefined : undefined
+  if (auth.isSuper && !tenantId) {
+    Object.assign(form, { host: '', port: 465, username: '', password: '', from: '', encryption: 'ssl', enabled: false })
+    return
+  }
   try {
-    const config = await smtpApi.get()
+    const config = await smtpApi.get(tenantId)
     if (config) Object.assign(form, config)
   } catch (error) {
     ElMessage.error(errorText(error))
   }
 }
 
-onMounted(load)
+onMounted(async () => {
+  if (auth.isSuper) {
+    try {
+      tenants.value = await tenantsApi.list()
+      if (tenants.value.length > 0) selectedTenantId.value = tenants.value[0].id
+    } catch (error) {
+      ElMessage.error(errorText(error))
+    }
+  }
+  await load()
+})
 
 async function save() {
   if (!auth.canConfigSmtp) {
     ElMessage.warning('当前角色无权修改 SMTP 配置')
+    return
+  }
+  if (auth.isSuper && !selectedTenantId.value) {
+    ElMessage.warning('请先选择要配置的租户')
     return
   }
   if (!formRef.value) return
@@ -101,7 +136,7 @@ async function save() {
   }
   saving.value = true
   try {
-    await smtpApi.update({ ...form })
+    await smtpApi.update({ ...form }, auth.isSuper ? selectedTenantId.value || undefined : undefined)
     ElMessage.success('保存成功')
   } catch (error) {
     ElMessage.error(errorText(error))

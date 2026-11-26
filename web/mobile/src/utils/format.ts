@@ -94,6 +94,13 @@ export function roleText(role?: string | null): string {
   return ROLE_TEXT[role || ''] ?? role ?? '未知'
 }
 
+export function roleTagType(role?: string | null): VantTagType {
+  if (role === 'super') return 'danger'
+  if (role === 'tenant_admin') return 'success'
+  if (role === 'operator') return 'primary'
+  return 'default'
+}
+
 const LEDGER_TEXT: Record<string, string> = {
   recharge: '充值',
   refund: '退款',
